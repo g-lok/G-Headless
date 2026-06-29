@@ -7,18 +7,45 @@
   changed_when: false
   failed_when: false
 
-- name: Lazy-unmount everything under {{ bootstrap_mount }}
+- name: Lazy-unmount everything under /mnt/{{ bootstrap_mount }}
   ansible.builtin.shell:
-    cmd: "umount -l -R {{ bootstrap_mount }} 2>/dev/null; true"
+    cmd: "umount -l -R /mnt/{{ bootstrap_mount }} 2>/dev/null; true"
   changed_when: false
   failed_when: false
 
-- name: Force-close LUKS on target image
+- name: Force-close LUKS + any stale mappers on target image
   ansible.builtin.shell:
     cmd: |
-      cryptsetup close crypted 2>/dev/null || dmsetup remove -f crypted 2>/dev/null || true
+      for map in $(dmsetup ls 2>/dev/null | cut -f1); do
+        device=$(cryptsetup status "$map" 2>/dev/null | sed -n 's/.*device: *//p')
+        if echo "$device" | grep -q '{{ tgt_loop | default("__NO_LOOP__") }}' 2>/dev/null; then
+          cryptsetup close "$map" 2>&1 || dmsetup remove -f "$map" 2>&1 || true
+        fi
+      done
       udevadm settle
   changed_when: false
+  failed_when: false
+
+- name: Close any stale mappers with base name
+  ansible.builtin.shell:
+    cmd: |
+      for map in $(dmsetup ls 2>/dev/null | grep "^{{ bootstrap_luks_mapper_name | default('crypted') }}" | cut -f1); do
+        cryptsetup close "$map" 2>&1 || dmsetup remove -f "$map" 2>&1 || true
+      done
+      udevadm settle
+  changed_when: false
+  failed_when: false
+
+- name: Detach target image loop device
+  ansible.builtin.shell:
+    cmd: "losetup -d {{ tgt_loop | default('') }} 2>/dev/null; true"
+  changed_when: true
+  failed_when: false
+
+- name: Detach source image loop device
+  ansible.builtin.shell:
+    cmd: "losetup -d {{ src_loop | default('') }} 2>/dev/null; true"
+  changed_when: true
   failed_when: false
 
 - name: Remove temp LUKS keyfile
@@ -30,6 +57,6 @@
 
 - name: Remove mount directory
   ansible.builtin.file:
-    path: "{{ bootstrap_mount }}"
+    path: /mnt/{{ bootstrap_mount }}
     state: absent
   failed_when: false
