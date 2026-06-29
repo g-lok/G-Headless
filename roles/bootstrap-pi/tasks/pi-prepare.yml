@@ -1,0 +1,188 @@
+---
+# ── Pi Phase 1: Image copy, expand, LUKS, rsync ────────────
+
+- name: Verify base image exists
+  ansible.builtin.stat:
+    path: "{{ pi_base_image }}"
+  register: base_img_stat
+
+- name: Fail if base image not found
+  ansible.builtin.fail:
+    msg: "Base image {{ pi_base_image }} not found. Provide Pi OS Lite image."
+  when: not base_img_stat.stat.exists
+
+- name: Remove old output image if exists
+  ansible.builtin.file:
+    path: "{{ pi_output_image }}"
+    state: absent
+
+- name: Copy base image to working target
+  ansible.builtin.copy:
+    src: "{{ pi_base_image }}"
+    dest: "{{ pi_output_image }}"
+    remote_src: true
+    mode: preserve
+
+- name: Append 1G for LUKS overhead
+  ansible.builtin.shell:
+    cmd: "dd if=/dev/zero bs=1G count=1 >> {{ pi_output_image }}"
+  changed_when: true
+
+- name: Expand root partition to fill image
+  ansible.builtin.shell:
+    cmd: "parted {{ pi_output_image }} resizepart 2 100%"
+  changed_when: true
+
+- name: Map source image (read-only) via losetup
+  ansible.builtin.shell:
+    cmd: |
+      set -euo pipefail
+      LOOP=$(losetup --find --show --partscan --read-only "{{ pi_base_image }}")
+      echo "src_loop=$LOOP"
+      ls "$LOOP"p*
+  register: src_loop_result
+  changed_when: false
+
+- name: Set src_loop fact
+  ansible.builtin.set_fact:
+    src_loop: "{{ src_loop_result.stdout_lines[0].split('=')[1] }}"
+
+- name: Map target image via losetup
+  ansible.builtin.shell:
+    cmd: |
+      set -euo pipefail
+      LOOP=$(losetup --find --show --partscan "{{ pi_output_image }}")
+      echo "tgt_loop=$LOOP"
+      ls "$LOOP"p*
+  register: tgt_loop_result
+  changed_when: true
+
+- name: Set tgt_loop fact
+  ansible.builtin.set_fact:
+    tgt_loop: "{{ tgt_loop_result.stdout_lines[0].split('=')[1] }}"
+
+- name: Set partition device facts
+  ansible.builtin.set_fact:
+    src_boot: "{{ src_loop }}p1"
+    src_root: "{{ src_loop }}p2"
+    tgt_boot: "{{ tgt_loop }}p1"
+    tgt_root: "{{ tgt_loop }}p2"
+
+- name: Capture LUKS UUID before encryption (for future use)
+  ansible.builtin.shell:
+    cmd: "cryptsetup luksUUID {{ tgt_root }}"
+  register: luks_uuid_check
+  changed_when: false
+  ignore_errors: true
+
+- name: Close existing LUKS mapping if present
+  ansible.builtin.shell:
+    cmd: |
+      for map in $(dmsetup ls 2>/dev/null | cut -f1); do
+        if echo "$map" | grep -q '^crypted'; then
+          cryptsetup close "$map" 2>&1 || dmsetup remove -f "$map" 2>&1 || true
+        fi
+      done
+      udevadm settle
+      sleep 1
+  changed_when: false
+  failed_when: false
+
+- name: Wipe filesystem signatures on root partition
+  ansible.builtin.command:
+    cmd: "wipefs -a {{ tgt_root }}"
+  changed_when: true
+  failed_when: false
+
+- name: Write LUKS password to temp keyfile (avoids shell quoting issues)
+  ansible.builtin.copy:
+    content: "{{ luks_password }}"
+    dest: /tmp/luks-keyfile
+    mode: '0600'
+  no_log: true
+
+- name: LUKS2 format target root partition
+  ansible.builtin.command:
+    argv:
+      - cryptsetup
+      - luksFormat
+      - --disable-locks
+      - --type=luks2
+      - --batch-mode
+      - --key-file=/tmp/luks-keyfile
+      - "{{ tgt_root }}"
+  register: luks_format
+  changed_when: luks_format.rc == 0
+
+- name: Capture LUKS UUID
+  ansible.builtin.command:
+    cmd: cryptsetup luksUUID "{{ tgt_root }}"
+  register: luks_uuid_result
+  changed_when: false
+
+- name: Set luks_uuid fact
+  ansible.builtin.set_fact:
+    luks_uuid: "{{ luks_uuid_result.stdout }}"
+
+- name: Open LUKS container
+  ansible.builtin.command:
+    argv:
+      - cryptsetup
+      - open
+      - --key-file=/tmp/luks-keyfile
+      - "{{ tgt_root }}"
+      - crypted
+  register: luks_open
+  changed_when: luks_open.rc == 0
+
+- name: Format mapped device as ext4
+  ansible.builtin.command:
+    cmd: mkfs.ext4 -F /dev/mapper/crypted
+  changed_when: true
+
+- name: Create mount directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    mode: "0755"
+  loop:
+    - /mnt/{{ bootstrap_mount }}/original
+    - /mnt/{{ bootstrap_mount }}
+    - /mnt/{{ bootstrap_mount }}/boot
+
+- name: Mount source root (read-only)
+  ansible.builtin.mount:
+    path: /mnt/{{ bootstrap_mount }}/original
+    src: "{{ src_root }}"
+    fstype: ext4
+    opts: ro
+    state: mounted
+
+- name: Mount target boot
+  ansible.builtin.mount:
+    path: /mnt/{{ bootstrap_mount }}/boot
+    src: "{{ tgt_boot }}"
+    fstype: vfat
+    state: mounted
+
+- name: Mount target encrypted root
+  ansible.builtin.mount:
+    path: /mnt/{{ bootstrap_mount }}
+    src: /dev/mapper/crypted
+    fstype: ext4
+    state: mounted
+
+- name: Rsync rootfs from source to target
+  ansible.builtin.shell:
+    cmd: >
+      rsync --archive --hard-links --acls --xattrs
+      --one-file-system --numeric-ids
+      /mnt/{{ bootstrap_mount }}/original/* /mnt/{{ bootstrap_mount }}/
+  register: rsync_result
+  changed_when: rsync_result.rc == 0
+  timeout: 300000
+
+- name: Unmount source root
+  ansible.builtin.mount:
+    path: /mnt/{{ bootstrap_mount }}/original
+    state: unmounted

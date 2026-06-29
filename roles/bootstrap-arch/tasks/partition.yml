@@ -1,0 +1,247 @@
+---
+# ── Phase 1: Partition, LUKS, filesystem ─────────────────
+
+- name: Set mount path
+  ansible.builtin.set_fact:
+    bootstrap_mount: "/mnt/{{ bootstrap_mount_subdir }}"
+
+- name: Lazy-unmount everything under {{ bootstrap_mount }}
+  ansible.builtin.shell:
+    cmd: "umount -l -R {{ bootstrap_mount }} 2>/dev/null; true"
+  changed_when: false
+  failed_when: false
+
+- name: Close LUKS mappings backed by target disk
+  ansible.builtin.shell:
+    cmd: |
+      for map in $(dmsetup ls 2>/dev/null | cut -f1); do
+        device=$(cryptsetup status "$map" 2>/dev/null | sed -n 's/.*device: *//p')
+        if echo "$device" | grep -q '{{ bootstrap_target_disk }}' 2>/dev/null; then
+          cryptsetup close "$map" 2>&1 || dmsetup remove -f "$map" 2>&1 || true
+        fi
+      done
+      udevadm settle
+      sleep 1
+  changed_when: false
+  failed_when: false
+
+- name: Close any stale mappers with base name
+  ansible.builtin.shell:
+    cmd: |
+      for map in $(dmsetup ls 2>/dev/null | grep "^{{ bootstrap_luks_mapper_name }}" | cut -f1); do
+        cryptsetup close "$map" 2>&1 || dmsetup remove -f "$map" 2>&1 || true
+      done
+      udevadm settle
+  changed_when: false
+  failed_when: false
+
+- name: Check if mapper name is taken
+  ansible.builtin.shell:
+    cmd: "dmsetup info {{ bootstrap_luks_mapper_name }} >/dev/null 2>&1 && echo EXISTS || echo FREE"
+  register: mapper_check
+  changed_when: false
+
+- name: Fall back to unique mapper name if stale
+  ansible.builtin.set_fact:
+    bootstrap_luks_mapper_name: "{{ bootstrap_luks_mapper_name }}-{{ 999999 | random }}"
+  when: mapper_check.stdout == 'EXISTS'
+
+- name: Wipe existing partition table
+  ansible.builtin.command:
+    cmd: sgdisk --zap-all "{{ bootstrap_target_disk }}"
+  register: sgdisk_zap
+  changed_when: sgdisk_zap.rc == 0
+
+- name: Partition disk — EFI + root
+  ansible.builtin.command:
+    argv:
+      - sgdisk
+      - --clear
+      - --new=1:0:+1G
+      - --typecode=1:EF00
+      - --change-name=1:EFI
+      - --new=2:0:0
+      - --typecode=2:8304
+      - --change-name=2:cryptroot
+      - "{{ bootstrap_target_disk }}"
+  register: sgdisk_result
+  changed_when: sgdisk_result.rc == 0
+
+- name: Update kernel partition table
+  ansible.builtin.command:
+    cmd: "partx -u {{ bootstrap_target_disk }}"
+  changed_when: true
+  failed_when: false
+
+- name: Wait for partition devices
+  ansible.builtin.wait_for:
+    path: "{{ bootstrap_luks_part }}"
+    state: present
+    timeout: 10
+
+- name: Write LUKS password to temp keyfile
+  ansible.builtin.copy:
+    content: "{{ bootstrap_luks_password }}"
+    dest: /tmp/luks-keyfile
+    mode: '0600'
+  no_log: true
+
+- name: LUKS2 format root partition
+  ansible.builtin.command:
+    argv:
+      - cryptsetup
+      - luksFormat
+      - --type=luks2
+      - --cipher={{ bootstrap_luks_cipher }}
+      - --key-size={{ bootstrap_luks_key_size | string }}
+      - --pbkdf={{ bootstrap_luks_pbkdf }}
+      - --label={{ bootstrap_luks_label }}
+      - --batch-mode
+      - --key-file=/tmp/luks-keyfile
+      - "{{ bootstrap_luks_part }}"
+  register: luks_format
+  changed_when: luks_format.rc == 0
+
+- name: Open LUKS container
+  ansible.builtin.command:
+    argv:
+      - cryptsetup
+      - open
+      - --key-file=/tmp/luks-keyfile
+      - "{{ bootstrap_luks_part }}"
+      - "{{ bootstrap_luks_mapper_name }}"
+  register: luks_open
+  changed_when: luks_open.rc == 0
+
+- name: Remove temp keyfile
+  ansible.builtin.file:
+    path: /tmp/luks-keyfile
+    state: absent
+  no_log: true
+
+- name: Capture LUKS UUID
+  ansible.builtin.command:
+    cmd: "cryptsetup luksUUID {{ bootstrap_luks_part }}"
+  register: luks_uuid_result
+  changed_when: false
+
+- name: Set luks_uuid fact
+  ansible.builtin.set_fact:
+    luks_uuid: "{{ luks_uuid_result.stdout }}"
+
+# ── Filesystem creation (btrfs/ext4/xfs) ─────────────────
+
+- name: Create btrfs filesystem
+  when: bootstrap_filesystem == 'btrfs'
+  block:
+    - name: Format btrfs on mapped device
+      ansible.builtin.filesystem:
+        fstype: btrfs
+        dev: "/dev/mapper/{{ bootstrap_luks_mapper_name }}"
+        opts: "-L {{ bootstrap_fs_label }}"
+
+    - name: Mount btrfs root (temporary)
+      ansible.builtin.mount:
+        path: "{{ bootstrap_mount }}"
+        src: "/dev/mapper/{{ bootstrap_luks_mapper_name }}"
+        fstype: btrfs
+        opts: "{{ bootstrap_btrfs_opts }}"
+        state: mounted
+
+    - name: Create btrfs subvolumes
+      ansible.builtin.command:
+        cmd: "btrfs subvolume create {{ bootstrap_mount }}/{{ item.name }}"
+      loop: "{{ bootstrap_btrfs_subvolumes }}"
+      changed_when: true
+
+    - name: Create container subvolumes (if enabled)
+      ansible.builtin.command:
+        cmd: "btrfs subvolume create {{ bootstrap_mount }}/{{ item.name }}"
+      loop: "{{ bootstrap_container_subvolume_list }}"
+      when: bootstrap_container_subvolumes | bool
+      changed_when: true
+
+    - name: Unmount temporary root
+      ansible.builtin.mount:
+        path: "{{ bootstrap_mount }}"
+        state: unmounted
+
+- name: Create ext4 filesystem
+  when: bootstrap_filesystem == 'ext4'
+  ansible.builtin.filesystem:
+    fstype: ext4
+    dev: "/dev/mapper/{{ bootstrap_luks_mapper_name }}"
+    opts: "-L {{ bootstrap_fs_label }}"
+
+- name: Create xfs filesystem
+  when: bootstrap_filesystem == 'xfs'
+  ansible.builtin.filesystem:
+    fstype: xfs
+    dev: "/dev/mapper/{{ bootstrap_luks_mapper_name }}"
+    opts: "-L {{ bootstrap_fs_label }}"
+
+# ── Mount for install ────────────────────────────────────
+
+- name: Mount root subvolume (btrfs)
+  when: bootstrap_filesystem == 'btrfs'
+  ansible.builtin.mount:
+    path: "{{ bootstrap_mount }}"
+    src: "/dev/mapper/{{ bootstrap_luks_mapper_name }}"
+    fstype: btrfs
+    opts: "{{ bootstrap_btrfs_opts }},subvol=@"
+    state: mounted
+
+- name: Mount root filesystem (ext4/xfs)
+  when: bootstrap_filesystem != 'btrfs'
+  ansible.builtin.mount:
+    path: "{{ bootstrap_mount }}"
+    src: "/dev/mapper/{{ bootstrap_luks_mapper_name }}"
+    fstype: "{{ bootstrap_filesystem }}"
+    opts: defaults
+    state: mounted
+
+- name: Mount remaining btrfs subvolumes
+  when: bootstrap_filesystem == 'btrfs'
+  block:
+    - name: Create mount point directories
+      ansible.builtin.file:
+        path: "{{ bootstrap_mount }}{{ item.path }}"
+        state: directory
+        mode: "0755"
+      loop: "{{ bootstrap_btrfs_subvolumes | rejectattr('path', 'equalto', '/') | list }}"
+
+    - name: Mount remaining subvolumes
+      ansible.builtin.mount:
+        path: "{{ bootstrap_mount }}{{ item.path }}"
+        src: "/dev/mapper/{{ bootstrap_luks_mapper_name }}"
+        fstype: btrfs
+        opts: "{{ bootstrap_btrfs_opts }},subvol={{ item.name }}"
+        state: mounted
+      loop: "{{ bootstrap_btrfs_subvolumes | rejectattr('path', 'equalto', '/') | list }}"
+
+    - name: Mount container subvolumes (if enabled)
+      when: bootstrap_container_subvolumes | bool
+      block:
+        - name: Create container mount point directories
+          ansible.builtin.file:
+            path: "{{ bootstrap_mount }}{{ item.path }}"
+            state: directory
+            mode: "0755"
+          loop: "{{ bootstrap_container_subvolume_list }}"
+
+        - name: Mount container subvolumes
+          ansible.builtin.mount:
+            path: "{{ bootstrap_mount }}{{ item.path }}"
+            src: "/dev/mapper/{{ bootstrap_luks_mapper_name }}"
+            fstype: btrfs
+            opts: "{{ bootstrap_btrfs_opts }},subvol={{ item.name }}"
+            state: mounted
+          loop: "{{ bootstrap_container_subvolume_list }}"
+
+- name: Mount EFI partition
+  ansible.builtin.mount:
+    path: "{{ bootstrap_mount }}/boot"
+    src: "{{ bootstrap_efi_part }}"
+    fstype: vfat
+    opts: fmask=0077,dmask=0077
+    state: mounted

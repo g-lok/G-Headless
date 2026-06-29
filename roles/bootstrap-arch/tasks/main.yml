@@ -1,0 +1,20 @@
+---
+# ── Bootstrap Arch Role ──────────────────────────────────
+
+- name: Bootstrap with guaranteed cleanup
+  block:
+    - name: Phase 1 — Partition, LUKS, filesystem
+      ansible.builtin.include_tasks: partition.yml
+
+    - name: Phase 2 — pacstrap + chroot base
+      ansible.builtin.include_tasks: bootstrap.yml
+
+    - name: Phase 3 — Network config
+      ansible.builtin.include_tasks: network.yml
+
+    - name: Phase 4 — Cleanup & summary
+      ansible.builtin.include_tasks: cleanup.yml
+
+  always:
+    - name: Emergency cleanup (runs even if playbook fails)
+      ansible.builtin.include_tasks: emergency-cleanup.yml

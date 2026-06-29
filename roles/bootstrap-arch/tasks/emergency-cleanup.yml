@@ -1,0 +1,40 @@
+---
+# ── Emergency cleanup (runs even if playbook fails) ───────
+
+- name: Sync disks
+  ansible.builtin.shell:
+    cmd: sync
+  changed_when: false
+  failed_when: false
+
+- name: Lazy-unmount everything under {{ bootstrap_mount }}
+  ansible.builtin.shell:
+    cmd: "umount -l -R {{ bootstrap_mount }} 2>/dev/null; true"
+  changed_when: false
+  failed_when: false
+
+- name: Force-close LUKS + any stale mappers on target disk
+  ansible.builtin.shell:
+    cmd: |
+      for map in $(dmsetup ls 2>/dev/null | cut -f1); do
+        device=$(cryptsetup status "$map" 2>/dev/null | sed -n 's/.*device: *//p')
+        if echo "$device" | grep -q '{{ bootstrap_target_disk }}' 2>/dev/null; then
+          cryptsetup close "$map" 2>&1 || dmsetup remove -f "$map" 2>&1 || true
+        fi
+      done
+      udevadm settle
+  changed_when: false
+  failed_when: false
+
+- name: Remove temp LUKS keyfile
+  ansible.builtin.file:
+    path: /tmp/luks-keyfile
+    state: absent
+  no_log: true
+  failed_when: false
+
+- name: Remove mount directory
+  ansible.builtin.file:
+    path: "{{ bootstrap_mount }}"
+    state: absent
+  failed_when: false

@@ -1,0 +1,61 @@
+---
+# ── Mount path (subdirectory of /mnt to avoid clobbering host mounts) ─
+bootstrap_mount_subdir: arch_bootstrap
+
+# ── Bootstrap target disk ──────────────────────────────
+bootstrap_target_disk: /dev/sdb
+bootstrap_efi_part: "{{ bootstrap_target_disk }}1"
+bootstrap_luks_part: "{{ bootstrap_target_disk }}2"
+bootstrap_partition_size_gb: 5
+
+# ── LUKS2 ──────────────────────────────────────────────
+bootstrap_luks_mapper_name: cryptroot
+bootstrap_luks_label: CRYPTROOT
+bootstrap_luks_cipher: aes-xts-plain64
+bootstrap_luks_key_size: 512
+bootstrap_luks_pbkdf: argon2id
+
+# ── Filesystem ─────────────────────────────────────────
+bootstrap_filesystem: btrfs
+bootstrap_fs_label: rootfs
+bootstrap_btrfs_opts: "compress=zstd,noatime,ssd"
+bootstrap_btrfs_subvolumes:
+  - { path: /, name: "@" }
+  - { path: /home, name: "@home" }
+  - { path: /.snapshots, name: "@snapshots" }
+  - { path: /var/log, name: "@var_log" }
+  - { path: /var/cache, name: "@var_cache" }
+  - { path: /var/lib/docker, name: "@var_lib_docker" }
+  - { path: /var/lib/containerd, name: "@var_lib_containerd" }
+  - { path: /var/lib/rancher, name: "@var_lib_rancher" }
+
+# ── System ─────────────────────────────────────────────
+bootstrap_hostname: myserver
+bootstrap_timezone: America/New_York
+bootstrap_locale: en_US.UTF-8
+bootstrap_kernel: linux-zen
+
+# ── Network (initramfs + post-boot) ────────────────────
+bootstrap_net_method: dhcp
+bootstrap_net_address: ""
+bootstrap_net_gateway: ""
+bootstrap_net_iface: "en*"
+
+# ── User ───────────────────────────────────────────────
+bootstrap_user_name: admin
+bootstrap_user_shell: /bin/bash
+bootstrap_user_groups: [wheel]
+bootstrap_ssh_public_key: "ssh-ed25519 AAAA... your-key-here"
+
+# ── Swap ───────────────────────────────────────────────
+bootstrap_disable_swap: false
+
+# ── Raspberry Pi (used by bootstrap-pi.yml) ───────────
+bootstrap_pi_model: 5  # 3, 4, or 5
+bootstrap_pi_base_image: "{{ playbook_dir }}/files/pi-base.img"
+bootstrap_pi_output_image: "{{ playbook_dir }}/files/pi-luks.img"
+
+# ── Secrets (from vault.yml) ───────────────────────────
+bootstrap_luks_password: "{{ vault_luks_password }}"
+bootstrap_root_password: "{{ vault_root_password }}"
+bootstrap_user_password: "{{ vault_user_password }}"

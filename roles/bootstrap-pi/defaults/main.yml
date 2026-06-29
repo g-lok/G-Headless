@@ -1,0 +1,52 @@
+---
+# ── Pi Bootstrap Configuration Defaults ──────────────────
+# Override these in your inventory, host_vars, or extra-vars
+
+# ── Pi model (3, 4, or 5) ────────────────────────────────
+# This determines the initramfs name and kernel modules
+bootstrap_pi_model: 5
+
+# ── Image paths ──────────────────────────────────────────
+bootstrap_pi_base_image: "{{ playbook_dir }}/files/pi-base.img"
+bootstrap_pi_output_image: "{{ playbook_dir }}/files/pi-luks.img"
+
+# ── Mount path ───────────────────────────────────────────
+bootstrap_mount_subdir: pi_bootstrap
+
+# ── LUKS configuration ───────────────────────────────────
+bootstrap_luks_mapper_name: cryptroot
+bootstrap_luks_label: CRYPTROOT
+bootstrap_luks_cipher: aes-xts-plain64
+bootstrap_luks_key_size: 512
+bootstrap_luks_pbkdf: argon2id
+
+# ── Filesystem ───────────────────────────────────────────
+# Pi only supports ext4 (btrfs not recommended for SD cards)
+bootstrap_filesystem: ext4
+bootstrap_fs_label: rootfs
+
+# ── System configuration ─────────────────────────────────
+bootstrap_hostname: pi-bootstrap
+bootstrap_timezone: UTC
+bootstrap_locale: en_US.UTF-8
+
+# ── Network (initramfs + post-boot) ──────────────────────
+bootstrap_net_method: dhcp  # dhcp or static
+bootstrap_net_address: ""   # e.g., 192.168.1.100/24
+bootstrap_net_gateway: ""   # e.g., 192.168.1.1
+bootstrap_net_iface: "eth0"
+
+# ── User configuration ───────────────────────────────────
+bootstrap_user_name: pi
+bootstrap_user_shell: /bin/bash
+bootstrap_user_groups: [sudo]
+bootstrap_ssh_public_key: ""  # Required: your SSH public key
+
+# ── Swap configuration ───────────────────────────────────
+# Set to true to disable swap (recommended for k3s/docker)
+bootstrap_disable_swap: false
+
+# ── Secrets (must be provided via extra-vars or vault) ───
+# bootstrap_luks_password: ""
+# bootstrap_root_password: ""
+# bootstrap_user_password: ""

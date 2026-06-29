@@ -1,0 +1,22 @@
+---
+# ── Bootstrap Pi Role ────────────────────────────────────
+
+- name: Set playbook type + mount path
+  ansible.builtin.set_fact:
+    playbook_type: pi
+    bootstrap_mount: pi_bootstrap
+
+- name: Bootstrap with guaranteed cleanup
+  block:
+    - name: Phase 1 — Prepare image, LUKS, filesystem
+      ansible.builtin.include_tasks: pi-prepare.yml
+
+    - name: Phase 2 — Chroot configuration
+      ansible.builtin.include_tasks: pi-chroot.yml
+
+    - name: Phase 3 — Cleanup & summary
+      ansible.builtin.include_tasks: pi-cleanup.yml
+
+  always:
+    - name: Emergency cleanup (runs even if playbook fails)
+      ansible.builtin.include_tasks: emergency-cleanup.yml

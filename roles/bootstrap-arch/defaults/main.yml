@@ -1,0 +1,74 @@
+---
+# ── Bootstrap Configuration Defaults ─────────────────────
+# Override these in your inventory, host_vars, or extra-vars
+
+# ── Target disk ──────────────────────────────────────────
+bootstrap_target_disk: /dev/sdb
+bootstrap_efi_part: "{{ bootstrap_target_disk }}1"
+bootstrap_luks_part: "{{ bootstrap_target_disk }}2"
+
+# ── Partition sizing ─────────────────────────────────────
+# Set to 0 for full disk, or specify GB for minimal image
+bootstrap_partition_size_gb: 0
+
+# ── Imaging (only used when bootstrap_partition_size_gb > 0) ──
+bootstrap_create_image: true
+bootstrap_image_path: "{{ playbook_dir }}/files/bootstrap-image.img"
+
+# ── Mount path ───────────────────────────────────────────
+bootstrap_mount_subdir: bootstrap_work
+
+# ── LUKS configuration ───────────────────────────────────
+bootstrap_luks_mapper_name: cryptroot
+bootstrap_luks_label: CRYPTROOT
+bootstrap_luks_cipher: aes-xts-plain64
+bootstrap_luks_key_size: 512
+bootstrap_luks_pbkdf: argon2id
+
+# ── Filesystem ───────────────────────────────────────────
+# Options: btrfs, ext4, xfs
+bootstrap_filesystem: btrfs
+bootstrap_fs_label: rootfs
+
+# ── btrfs options (only used when bootstrap_filesystem == btrfs) ──
+bootstrap_btrfs_opts: "compress=zstd,noatime,ssd"
+bootstrap_btrfs_subvolumes:
+  - { path: /, name: "@" }
+  - { path: /home, name: "@home" }
+  - { path: /.snapshots, name: "@snapshots" }
+  - { path: /var/log, name: "@var_log" }
+  - { path: /var/cache, name: "@var_cache" }
+
+# ── System configuration ─────────────────────────────────
+bootstrap_hostname: bootstrap-host
+bootstrap_timezone: UTC
+bootstrap_locale: en_US.UTF-8
+bootstrap_kernel: linux
+
+# ── Network (initramfs + post-boot) ──────────────────────
+bootstrap_net_method: dhcp  # dhcp or static
+bootstrap_net_address: ""   # e.g., 192.168.1.100/24
+bootstrap_net_gateway: ""   # e.g., 192.168.1.1
+bootstrap_net_iface: "en*"
+
+# ── User configuration ───────────────────────────────────
+bootstrap_user_name: user
+bootstrap_user_shell: /bin/bash
+bootstrap_user_groups: [wheel]
+bootstrap_ssh_public_key: ""  # Required: your SSH public key
+
+# ── Swap configuration ───────────────────────────────────
+# Set to true to disable swap (recommended for k3s/docker)
+bootstrap_disable_swap: false
+
+# ── Container subvolumes (only for btrfs + k3s/docker) ───
+bootstrap_container_subvolumes: false
+bootstrap_container_subvolume_list:
+  - { path: /var/lib/docker, name: "@var_lib_docker" }
+  - { path: /var/lib/containerd, name: "@var_lib_containerd" }
+  - { path: /var/lib/rancher, name: "@var_lib_rancher" }
+
+# ── Secrets (must be provided via extra-vars or vault) ───
+# bootstrap_luks_password: ""
+# bootstrap_root_password: ""
+# bootstrap_user_password: ""

@@ -1,0 +1,35 @@
+---
+# ── Emergency cleanup for Pi (runs even if playbook fails) ───────
+
+- name: Sync disks
+  ansible.builtin.shell:
+    cmd: sync
+  changed_when: false
+  failed_when: false
+
+- name: Lazy-unmount everything under {{ bootstrap_mount }}
+  ansible.builtin.shell:
+    cmd: "umount -l -R {{ bootstrap_mount }} 2>/dev/null; true"
+  changed_when: false
+  failed_when: false
+
+- name: Force-close LUKS on target image
+  ansible.builtin.shell:
+    cmd: |
+      cryptsetup close crypted 2>/dev/null || dmsetup remove -f crypted 2>/dev/null || true
+      udevadm settle
+  changed_when: false
+  failed_when: false
+
+- name: Remove temp LUKS keyfile
+  ansible.builtin.file:
+    path: /tmp/luks-keyfile
+    state: absent
+  no_log: true
+  failed_when: false
+
+- name: Remove mount directory
+  ansible.builtin.file:
+    path: "{{ bootstrap_mount }}"
+    state: absent
+  failed_when: false

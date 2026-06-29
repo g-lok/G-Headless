@@ -1,0 +1,352 @@
+---
+# ── Phase 2: pacstrap + chroot config ───────────────────────
+
+- name: Write clean pacman.conf + mirrorlist (avoid host CachyOS repos)
+  ansible.builtin.copy:
+    dest: /tmp/pacstrap-pacman.conf
+    content: |
+      [options]
+      HoldPkg = pacman glibc
+      Architecture = auto
+      SigLevel = Required DatabaseOptional
+      LocalFileSigLevel = Optional
+
+      [core]
+      Include = /tmp/pacstrap-mirrorlist
+
+      [extra]
+      Include = /tmp/pacstrap-mirrorlist
+
+      [multilib]
+      Include = /tmp/pacstrap-mirrorlist
+    mode: "0644"
+
+- name: Write clean mirrorlist (official Arch mirrors)
+  ansible.builtin.copy:
+    dest: /tmp/pacstrap-mirrorlist
+    content: |
+      ##
+      ## Arch Linux repository mirrorlist
+      ##
+
+      ## Worldwide
+      Server = https://mirror.rackspace.com/archlinux/$repo/os/$arch
+      Server = https://archlinux.thaller.ws/$repo/os/$arch
+      Server = https://mirrors.kernel.org/archlinux/$repo/os/$arch
+    mode: "0644"
+
+- name: Clean /mnt/{{ bootstrap_mount }}/boot before pacstrap (remove partial leftovers)
+  ansible.builtin.shell:
+    cmd: rm -rf /mnt/{{ bootstrap_mount }}/boot/* /mnt/{{ bootstrap_mount }}/boot/.* 2>/dev/null; true
+  changed_when: false
+  failed_when: false
+
+- name: Install base packages via pacstrap
+  ansible.builtin.command:
+    cmd: >
+      pacstrap -C /tmp/pacstrap-pacman.conf -K /mnt/{{ bootstrap_mount }}
+      base
+      {{ bootstrap_kernel }}
+      linux-firmware
+      intel-ucode
+      mkinitcpio
+      cryptsetup
+      btrfs-progs
+      dosfstools
+      sudo
+      tinyssh
+      openssh
+      avahi
+      nss-mdns
+      systemd
+      efibootmgr
+      python
+  register: pacstrap_result
+  changed_when: pacstrap_result.rc == 0
+  timeout: 600000
+
+- name: Generate fstab
+  ansible.builtin.command:
+    cmd: genfstab -U /mnt/{{ bootstrap_mount }}
+  register: fstab_content
+  changed_when: false
+
+- name: Write fstab
+  ansible.builtin.copy:
+    content: "{{ fstab_content.stdout }}\n"
+    dest: /mnt/{{ bootstrap_mount }}/etc/fstab
+    mode: "0644"
+
+# ── Basic system config ─────────────────────────────────
+
+- name: Set timezone
+  ansible.builtin.shell:
+    cmd: "arch-chroot /mnt/{{ bootstrap_mount }} ln -sf /usr/share/zoneinfo/{{ bootstrap_timezone }} /etc/localtime"
+  changed_when: true
+
+- name: Set hardware clock
+  ansible.builtin.shell:
+    cmd: "arch-chroot /mnt/{{ bootstrap_mount }} hwclock --systohc"
+  changed_when: true
+
+- name: Generate locale
+  ansible.builtin.shell:
+    cmd: |
+      arch-chroot /mnt/{{ bootstrap_mount }} sed -i 's/^#{{ bootstrap_locale }}/{{ bootstrap_locale }}/' /etc/locale.gen
+      arch-chroot /mnt/{{ bootstrap_mount }} locale-gen
+  changed_when: true
+
+- name: Set locale config
+  ansible.builtin.copy:
+    content: "LANG={{ bootstrap_locale }}\n"
+    dest: /mnt/{{ bootstrap_mount }}/etc/locale.conf
+    mode: "0644"
+
+- name: Set hostname
+  ansible.builtin.copy:
+    content: "{{ bootstrap_hostname }}\n"
+    dest: /mnt/{{ bootstrap_mount }}/etc/hostname
+    mode: "0644"
+
+- name: Set hosts file
+  ansible.builtin.copy:
+    content: |
+      127.0.0.1   localhost
+      ::1         localhost
+      127.0.1.1   {{ bootstrap_hostname }}.local {{ bootstrap_hostname }}
+    dest: /mnt/{{ bootstrap_mount }}/etc/hosts
+    mode: "0644"
+
+# ── crypttab.initramfs ──────────────────────────────────
+
+- name: Create /etc/crypttab.initramfs
+  ansible.builtin.copy:
+    content: "{{ bootstrap_luks_mapper_name }}  UUID={{ luks_uuid }}  none  luks,discard\n"
+    dest: /mnt/{{ bootstrap_mount }}/etc/crypttab.initramfs
+    mode: "0644"
+
+# ── mkinitcpio.conf ────────────────────────────────────
+
+- name: Write mkinitcpio.conf
+  ansible.builtin.copy:
+    dest: /mnt/{{ bootstrap_mount }}/etc/mkinitcpio.conf
+    content: |
+      MODULES=(igc{% if bootstrap_filesystem == 'btrfs' %} btrfs{% endif %})
+      BINARIES=()
+      FILES=(/etc/crypttab.initramfs /etc/systemd/network/20-wired.network)
+      HOOKS=(base systemd autodetect microcode modconf kms keyboard sd-vconsole block sd-network sd-tinyssh sd-encrypt filesystems fsck)
+      SD_TINYSSH_COMMAND="systemd-tty-ask-password-agent --query --watch"
+    mode: "0644"
+
+# ── Kernel cmdline ─────────────────────────────────────
+
+- name: Write kernel cmdline
+  ansible.builtin.copy:
+    content: |
+      rd.luks.name={{ luks_uuid }}={{ bootstrap_luks_mapper_name }}
+      root=/dev/mapper/{{ bootstrap_luks_mapper_name }}
+      rootflags={% if bootstrap_filesystem == 'btrfs' %}subvol=@,{% endif %}x-systemd.device-timeout=0
+      rw
+      quiet
+      ip={{ bootstrap_net_address }}::{{ bootstrap_net_gateway }}:255.255.254.0:{{ bootstrap_hostname }}:{{ net_iface | regex_replace('\\*', '') }}:none
+    dest: /mnt/{{ bootstrap_mount }}/etc/kernel/cmdline
+    mode: "0644"
+
+# ── UKI preset ─────────────────────────────────────────
+
+- name: Write mkinitcpio preset for UKI
+  ansible.builtin.copy:
+    dest: "/mnt/{{ bootstrap_mount }}/etc/mkinitcpio.d/{{ bootstrap_kernel }}.preset"
+    content: |
+      ALL_config=/etc/mkinitcpio.conf
+      ALL_kver="/boot/vmlinuz-{{ bootstrap_kernel }}"
+
+      PRESETS=('default' 'fallback')
+
+      default_uki=/boot/EFI/Linux/arch-{{ bootstrap_kernel }}.efi
+      default_options="--splash /usr/share/systemd/bootctl/splash-arch.bmp"
+
+      fallback_uki=/boot/EFI/Linux/arch-{{ bootstrap_kernel }}-fallback.efi
+      fallback_options="-S autodetect"
+    mode: "0644"
+
+# ── User setup ─────────────────────────────────────────
+
+- name: Set root password
+  ansible.builtin.shell:
+    cmd: "arch-chroot /mnt/{{ bootstrap_mount }} sh -c 'echo root:{{ bootstrap_root_password }} | chpasswd'"
+  changed_when: true
+  no_log: true
+
+- name: Create user
+  ansible.builtin.shell:
+    cmd: >
+      arch-chroot /mnt/{{ bootstrap_mount }} useradd
+      -m -G {{ user_groups | join(',') }}
+      -s {{ bootstrap_user_shell }}
+      {{ bootstrap_user_name }}
+  register: useradd_result
+  changed_when: useradd_result.rc == 0
+  failed_when: useradd_result.rc != 0 and useradd_result.rc != 9
+
+- name: Set user password
+  ansible.builtin.shell:
+    cmd: "arch-chroot /mnt/{{ bootstrap_mount }} sh -c 'echo {{ bootstrap_user_name }}:{{ bootstrap_user_password }} | chpasswd'"
+  changed_when: true
+  no_log: true
+
+- name: Enable sudo for wheel group
+  ansible.builtin.copy:
+    dest: /mnt/{{ bootstrap_mount }}/etc/sudoers.d/wheel
+    content: "%wheel ALL=(ALL:ALL) ALL\n"
+    mode: "0440"
+
+- name: Create user .ssh directory
+  ansible.builtin.file:
+    path: "/mnt/{{ bootstrap_mount }}/home/{{ bootstrap_user_name }}/.ssh"
+    state: directory
+    mode: "0700"
+    owner: "{{ bootstrap_user_name }}"
+    group: "{{ bootstrap_user_name }}"
+
+- name: Copy SSH public key for user
+  ansible.builtin.copy:
+    content: "{{ bootstrap_ssh_public_key }}\n"
+    dest: "/mnt/{{ bootstrap_mount }}/home/{{ bootstrap_user_name }}/.ssh/authorized_keys"
+    mode: "0600"
+    owner: "{{ bootstrap_user_name }}"
+    group: "{{ bootstrap_user_name }}"
+
+# ── SSH hardening ──────────────────────────────────────
+
+- name: Harden SSH via drop-in
+  ansible.builtin.copy:
+    dest: /mnt/{{ bootstrap_mount }}/etc/ssh/sshd_config.d/10-hardening.conf
+    content: |
+      PasswordAuthentication no
+      PermitRootLogin no
+      PubkeyAuthentication yes
+      AuthenticationMethods publickey
+    mode: "0600"
+
+- name: Enable sshd service
+  ansible.builtin.shell:
+    cmd: "arch-chroot /mnt/{{ bootstrap_mount }} systemctl enable sshd"
+  changed_when: true
+
+# ── tinyssh config (initramfs SSH unlock) ──────────────
+
+- name: Create tinyssh directories
+  ansible.builtin.file:
+    path: "/mnt/{{ bootstrap_mount }}{{ item }}"
+    state: directory
+    mode: "0755"
+  loop:
+    - /etc/tinyssh
+    - /etc/tinyssh/sshkeydir
+
+- name: Copy SSH public key for tinyssh (root_key)
+  ansible.builtin.copy:
+    content: "{{ bootstrap_ssh_public_key }}\n"
+    dest: /mnt/{{ bootstrap_mount }}/etc/tinyssh/root_key
+    mode: "0600"
+
+- name: Generate tinyssh host keys
+  ansible.builtin.shell:
+    cmd: "arch-chroot /mnt/{{ bootstrap_mount }} sh -c 'rm -rf /etc/tinyssh/sshkeydir && tinysshd-makekey /etc/tinyssh/sshkeydir'"
+  changed_when: true
+
+# ── Install vendored mkinitcpio-systemd-extras ─────────
+# Provides sd-network + sd-tinyssh hooks
+
+- name: Find vendored package
+  ansible.builtin.find:
+    paths: "{{ playbook_dir }}/files"
+    patterns: "mkinitcpio-systemd-extras-*.pkg.tar.zst"
+  register: vendored_pkg
+
+- name: Fail if vendored package missing
+  ansible.builtin.fail:
+    msg: "No mkinitcpio-systemd-extras-*.pkg.tar.zst found in files/. Build: clone AUR repo, makepkg -sc, copy to files/"
+  when: vendored_pkg.files | length == 0
+
+- name: Set vendored package basename
+  ansible.builtin.set_fact:
+    vendored_pkg_basename: "{{ vendored_pkg.files[0].path | basename }}"
+
+- name: Copy vendored package into chroot
+  ansible.builtin.copy:
+    src: "{{ vendored_pkg.files[0].path }}"
+    dest: "/mnt/{{ bootstrap_mount }}/tmp/{{ vendored_pkg_basename }}"
+    mode: "0644"
+    force: true
+
+- name: Install vendored mkinitcpio-systemd-extras
+  ansible.builtin.command:
+    argv:
+      - pacman
+      - --root=/mnt/{{ bootstrap_mount }}
+      - --cachedir=/mnt/{{ bootstrap_mount }}/var/cache/pacman/pkg
+      - --config=/mnt/{{ bootstrap_mount }}/etc/pacman.conf
+      - -U
+      - --noconfirm
+      - "/mnt/{{ bootstrap_mount }}/tmp/{{ vendored_pkg_basename }}"
+  changed_when: true
+
+# ── Initramfs network config ───────────────────────────
+
+- name: Create initramfs/post-boot network config
+  ansible.builtin.copy:
+    dest: /mnt/{{ bootstrap_mount }}/etc/systemd/network/20-wired.network
+    content: |
+      [Match]
+      Name={{ bootstrap_net_iface }}
+
+      [Network]
+      Address={{ bootstrap_net_address }}
+      Gateway={{ bootstrap_net_gateway }}
+    mode: "0644"
+
+# ── Bootloader ─────────────────────────────────────────
+
+- name: Create UKI output directory
+  ansible.builtin.file:
+    path: /mnt/{{ bootstrap_mount }}/boot/EFI/Linux
+    state: directory
+    mode: "0755"
+
+- name: Install systemd-boot
+  ansible.builtin.shell:
+    cmd: "arch-chroot /mnt/{{ bootstrap_mount }} bootctl install --no-variables"
+  changed_when: true
+
+- name: Write loader.conf
+  ansible.builtin.copy:
+    dest: /mnt/{{ bootstrap_mount }}/boot/loader/loader.conf
+    content: |
+      default arch-{{ bootstrap_kernel }}.efi
+      timeout 3
+      console-mode auto
+      editor no
+    mode: "0644"
+
+- name: Create fallback loader entry
+  ansible.builtin.copy:
+    dest: /mnt/{{ bootstrap_mount }}/boot/loader/entries/arch-fallback.conf
+    content: |
+      title   {{ bootstrap_hostname }} (fallback UKI)
+      efi     /EFI/Linux/arch-{{ bootstrap_kernel }}-fallback.efi
+    mode: "0644"
+
+# ── Rebuild initramfs ──────────────────────────────────
+
+- name: Ensure kernel vmlinuz present (reinstall if missing)
+  ansible.builtin.shell:
+    cmd: "arch-chroot /mnt/{{ bootstrap_mount }} pacman -S --noconfirm linux-zen"
+  changed_when: true
+
+- name: Regenerate initramfs (builds UKI)
+  ansible.builtin.shell:
+    cmd: "arch-chroot /mnt/{{ bootstrap_mount }} mkinitcpio -P"
+  changed_when: true
+  timeout: 300000

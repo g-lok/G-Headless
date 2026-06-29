@@ -1,0 +1,173 @@
+---
+# ── Post-restore partition/LUKS/filesystem expansion ─────
+# Run after restoring a minimal image to expand to full disk.
+#
+# Usage:
+#   ansible-playbook playbooks/post-bootstrap/resize.yml \
+#     -e target_disk=/dev/nvme0n1 \
+#     --ask-become-pass
+#
+# This playbook:
+#   1. Detects if partition needs expansion
+#   2. Expands partition to fill disk
+#   3. Expands LUKS container
+#   4. Expands filesystem (btrfs/ext4/xfs)
+
+- name: Post-restore resize
+  hosts: localhost
+  gather_facts: true
+  become: true
+
+  vars:
+    target_disk: ""  # Required: e.g., /dev/nvme0n1 or /dev/sda
+    luks_mapper_name: cryptroot
+
+  pre_tasks:
+    - name: Verify target disk
+      ansible.builtin.assert:
+        that:
+          - target_disk | length > 0
+          - target_disk is exists
+        fail_msg: "target_disk is required and must exist"
+
+    - name: Detect root device
+      ansible.builtin.set_fact:
+        root_dev: >-
+          {{ ansible_mounts
+             | selectattr('mount', 'equalto', '/')
+             | map(attribute='device')
+             | first
+             | default('/dev/mapper/' + luks_mapper_name) }}
+
+    - name: Detect partition device
+      ansible.builtin.command:
+        cmd: "lsblk -npo PKNAME {{ root_dev }}"
+      register: part_dev_result
+      changed_when: false
+
+    - name: Set partition device
+      ansible.builtin.set_fact:
+        part_dev: "{{ part_dev_result.stdout }}"
+
+    - name: Detect parent disk
+      ansible.builtin.set_fact:
+        disk_dev: "{{ part_dev | regex_replace('p?\\d+$', '') }}"
+
+    - name: Detect partition number
+      ansible.builtin.set_fact:
+        part_num: "{{ part_dev | regex_replace('^.*(\\d+)$', '\\1') }}"
+
+    - name: Detect filesystem type
+      ansible.builtin.command:
+        cmd: "blkid -o value -s TYPE {{ root_dev }}"
+      register: fs_type_result
+      changed_when: false
+
+    - name: Set filesystem type
+      ansible.builtin.set_fact:
+        fs_type: "{{ fs_type_result.stdout }}"
+
+  tasks:
+    - name: Check if partition needs expansion
+      ansible.builtin.shell:
+        cmd: |
+          set -euo pipefail
+          DISK_END=$(sgdisk -p "{{ disk_dev }}" | awk '/^Disk/ {print $3}')
+          PART_LAST=$(sgdisk -i {{ part_num }} "{{ disk_dev }}" | awk '/Last sector/ {print $3}')
+          THRESHOLD=$(( DISK_END - 34 ))
+          if [ "$PART_LAST" -ge "$THRESHOLD" ]; then
+            echo "FULL"
+          else
+            echo "SHRUNKEN"
+          fi
+      register: size_check
+      changed_when: false
+
+    - name: Set needs_expand fact
+      ansible.builtin.set_fact:
+        needs_expand: "{{ size_check.stdout == 'SHRUNKEN' }}"
+
+    - name: Skip if already full size
+      ansible.builtin.debug:
+        msg: "Partition already fills disk — nothing to do"
+      when: not needs_expand
+
+    - name: Expand partition, LUKS, and filesystem
+      when: needs_expand
+      block:
+        - name: Log expansion start
+          ansible.builtin.debug:
+            msg: "Partition {{ part_dev }} does not fill disk — expanding"
+
+        - name: Record partition start sector
+          ansible.builtin.command:
+            cmd: "sgdisk -i {{ part_num }} {{ disk_dev }} | awk '/First sector/ {print $3}'"
+          register: start_sector_result
+          changed_when: false
+
+        - name: Set start_sector fact
+          ansible.builtin.set_fact:
+            start_sector: "{{ start_sector_result.stdout }}"
+
+        - name: Expand partition via sgdisk
+          ansible.builtin.command:
+            cmd: >
+              sgdisk
+              --delete={{ part_num }}
+              --new={{ part_num }}:{{ start_sector }}:0
+              --typecode={{ part_num }}:8304
+              --change-name={{ part_num }}:"cryptroot"
+              {{ disk_dev }}
+          register: sgdisk_result
+          changed_when: sgdisk_result.rc == 0
+
+        - name: Update kernel partition table
+          ansible.builtin.command:
+            cmd: "partx -u {{ disk_dev }}"
+          register: partx_result
+          changed_when: partx_result.rc == 0
+          failed_when: false
+
+        - name: Fallback per-partition partx
+          ansible.builtin.command:
+            cmd: "partx -u {{ part_dev }}"
+          when: partx_result is failed
+          changed_when: true
+          failed_when: false
+
+        - name: Expand LUKS container
+          ansible.builtin.command:
+            cmd: "cryptsetup resize {{ root_dev | basename }}"
+          register: crypt_result
+          changed_when: crypt_result.rc == 0
+
+        - name: Expand btrfs filesystem
+          when: fs_type == 'btrfs'
+          ansible.builtin.command:
+            cmd: "btrfs filesystem resize max /"
+          register: btrfs_result
+          changed_when: btrfs_result.rc == 0
+
+        - name: Expand ext4 filesystem
+          when: fs_type == 'ext4'
+          ansible.builtin.command:
+            cmd: "resize2fs {{ root_dev }}"
+          register: ext4_result
+          changed_when: ext4_result.rc == 0
+
+        - name: Expand xfs filesystem
+          when: fs_type == 'xfs'
+          ansible.builtin.command:
+            cmd: "xfs_growfs /"
+          register: xfs_result
+          changed_when: xfs_result.rc == 0
+
+        - name: Verify final size
+          ansible.builtin.command:
+            cmd: "df -h /"
+          register: df_verify
+          changed_when: false
+
+        - name: Show expansion result
+          ansible.builtin.debug:
+            var: df_verify.stdout_lines

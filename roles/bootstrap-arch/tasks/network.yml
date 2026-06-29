@@ -1,0 +1,50 @@
+---
+# ── Enable post-boot services ───────────────────────────────
+
+- name: Enable systemd-networkd
+  ansible.builtin.shell:
+    cmd: "arch-chroot /mnt/{{ bootstrap_mount }} systemctl enable systemd-networkd"
+  changed_when: true
+
+- name: Enable systemd-resolved
+  ansible.builtin.shell:
+    cmd: "arch-chroot /mnt/{{ bootstrap_mount }} systemctl enable systemd-resolved"
+  changed_when: true
+
+- name: Hook resolved into /etc/resolv.conf
+  ansible.builtin.shell:
+    cmd: |
+      arch-chroot /mnt/{{ bootstrap_mount }} sh -c '
+        umount /etc/resolv.conf 2>/dev/null
+        rm -f /etc/resolv.conf
+        ln -sf /run/systemd/resolve/stub-resolv.conf /etc/resolv.conf
+      '
+  changed_when: true
+
+- name: Enable sshd
+  ansible.builtin.shell:
+    cmd: "arch-chroot /mnt/{{ bootstrap_mount }} systemctl enable sshd"
+  changed_when: true
+
+- name: Enable avahi-daemon
+  ansible.builtin.shell:
+    cmd: "arch-chroot /mnt/{{ bootstrap_mount }} systemctl enable avahi-daemon"
+  changed_when: true
+
+- name: Disable swap for k3s/docker compatibility
+  ansible.builtin.shell:
+    cmd: |
+      arch-chroot /mnt/{{ bootstrap_mount }} sh -c '
+        swapoff -a
+        systemctl mask swap.target
+        systemctl mask dev-zram0.swap 2>/dev/null || true
+        rm -f /swap/swapfile 2>/dev/null || true
+        sed -i "/swap/d" /etc/fstab 2>/dev/null || true
+      '
+  changed_when: true
+
+- name: Configure nss-mdns for .local resolution
+  ansible.builtin.lineinfile:
+    path: /mnt/{{ bootstrap_mount }}/etc/nsswitch.conf
+    regexp: '^hosts:'
+    line: "hosts: mymachines resolve [!UNAVAIL=return] mdns_minimal [NOTFOUND=return] files myhostname dns"

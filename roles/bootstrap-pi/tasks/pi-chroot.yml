@@ -1,0 +1,256 @@
+---
+# ── Pi Phase 2: qemu chroot + dropbear + initramfs config ──
+
+- name: Set Pi model-specific variables
+  ansible.builtin.set_fact:
+    pi_initramfs_name: >-
+      {%- if bootstrap_pi_model == 3 -%}
+        initramfs_2710
+      {%- elif bootstrap_pi_model == 4 -%}
+        initramfs_2711
+      {%- elif bootstrap_pi_model == 5 -%}
+        initramfs_2712
+      {%- else -%}
+        initramfs_2712
+      {%- endif -%}
+    pi_kernel_modules: >-
+      {%- if bootstrap_pi_model == 3 -%}
+        aes_arm_bs
+        sha256_arm
+        dm_crypt
+        lan78xx
+      {%- else -%}
+        aes_ce_blk
+        aes_ce_cipher
+        sha2_ce
+        sha1_ce
+        dm_crypt
+        genet
+      {%- endif -%}
+
+- name: Bind mount for chroot
+  ansible.builtin.shell:
+    cmd: |
+      mount --bind /dev  /mnt/{{ bootstrap_mount }}/dev
+      mount --bind /dev/pts /mnt/{{ bootstrap_mount }}/dev/pts
+      mount -t proc proc /mnt/{{ bootstrap_mount }}/proc
+      mount -t sysfs sys  /mnt/{{ bootstrap_mount }}/sys
+      mount --bind /run  /mnt/{{ bootstrap_mount }}/run
+  changed_when: true
+
+- name: Copy qemu-aarch64-static into chroot for ARM emulation
+  ansible.builtin.shell:
+    cmd: "cp $(which qemu-aarch64-static) /mnt/{{ bootstrap_mount }}/usr/bin/qemu-aarch64-static"
+  changed_when: true
+
+- name: Copy resolv.conf for network inside chroot
+  ansible.builtin.copy:
+    src: /etc/resolv.conf
+    dest: /mnt/{{ bootstrap_mount }}/etc/resolv.conf
+    mode: "0644"
+    remote_src: true
+
+# ── Inside chroot via qemu-user-static ──────────────────────
+
+- name: Update apt and install packages inside chroot
+  ansible.builtin.shell: |
+    chroot /mnt/{{ bootstrap_mount }} /bin/bash << 'CHROOT_EOF'
+      apt update
+      apt install -y busybox cryptsetup cryptsetup-initramfs dropbear-initramfs python3
+    CHROOT_EOF
+  register: apt_result
+  changed_when: apt_result.rc == 0
+  timeout: 300000
+
+- name: Configure /etc/fstab inside chroot
+  ansible.builtin.shell: |
+    chroot /mnt/{{ bootstrap_mount }} /bin/bash << 'CHROOT_EOF'
+      set -euo pipefail
+      # Replace root partition in fstab
+      ROOT_DEV=$(findmnt / -o source -n 2>/dev/null || echo "/dev/mapper/crypted")
+      sed -i "s|PARTUUID=[^ ]* / |${ROOT_DEV} / |" /etc/fstab
+      sed -i "s|/dev/mmcblk0p2 / |/dev/mapper/crypted / |" /etc/fstab
+    CHROOT_EOF
+  changed_when: true
+
+- name: Configure /etc/crypttab inside chroot
+  ansible.builtin.shell: |
+    chroot /mnt/{{ bootstrap_mount }} /bin/bash -c \
+      'echo "crypted  UUID={{ luks_uuid }}  none  luks,initramfs" > /etc/crypttab'
+  changed_when: true
+
+- name: Configure cryptsetup-initramfs conf-hook inside chroot
+  ansible.builtin.shell: |
+    chroot /mnt/{{ bootstrap_mount }} /bin/bash << 'CHROOT_EOF'
+      set -euo pipefail
+      # Ensure CRYPTSETUP=y
+      if grep -q '^CRYPTSETUP' /etc/cryptsetup-initramfs/conf-hook 2>/dev/null; then
+        sed -i 's/^CRYPTSETUP.*/CRYPTSETUP=y/' /etc/cryptsetup-initramfs/conf-hook
+      else
+        echo 'CRYPTSETUP=y' >> /etc/cryptsetup-initramfs/conf-hook
+      fi
+      # Hardcode UUID values for chroot build (critical)
+      echo 'export CRYPTSETUP=y' >> /etc/cryptsetup-initramfs/conf-hook
+      echo '_CRYPTTAB_NAME="crypted"' >> /etc/cryptsetup-initramfs/conf-hook
+      echo '_CRYPTTAB_SOURCE="UUID={{ luks_uuid }}"' >> /etc/cryptsetup-initramfs/conf-hook
+      echo '_CRYPTTAB_OPTIONS="luks,initramfs"' >> /etc/cryptsetup-initramfs/conf-hook
+    CHROOT_EOF
+  changed_when: true
+
+- name: Write cryptroot patch file
+  ansible.builtin.copy:
+    dest: /tmp/cryptroot-hook.patch
+    content: |
+      --- cryptroot
+      +++ cryptroot
+      @@ -33,7 +33,7 @@
+               printf '%s\0' "$target" >>"$DESTDIR/cryptroot/targets"
+               crypttab_find_entry "$target" || return 1
+               crypttab_parse_options --missing-path=warn || return 1
+      -        crypttab_print_entry
+      +        printf '%s %s %s %s\n' "$_CRYPTTAB_NAME" "$_CRYPTTAB_SOURCE" "$_CRYPTTAB_KEY" "$_CRYPTTAB_OPTIONS" >&3
+           fi
+        }
+    mode: "0644"
+
+- name: Apply cryptroot hook patch inside chroot
+  ansible.builtin.shell: |
+    cp /tmp/cryptroot-hook.patch /mnt/{{ bootstrap_mount }}/tmp/cryptroot-hook.patch
+    chroot /mnt/{{ bootstrap_mount }} /bin/bash -c \
+      'patch --no-backup-if-mismatch /usr/share/initramfs-tools/hooks/cryptroot /tmp/cryptroot-hook.patch && rm /tmp/cryptroot-hook.patch'
+  changed_when: true
+  failed_when: false
+
+- name: Increase unlock timeout inside chroot
+  ansible.builtin.shell: |
+    chroot /mnt/{{ bootstrap_mount }} /bin/bash -c \
+      'sed -i "s/^TIMEOUT=.*/TIMEOUT=100/g" /usr/share/cryptsetup/initramfs/bin/cryptroot-unlock 2>/dev/null; true'
+  changed_when: true
+
+- name: Configure dropbear inside chroot
+  ansible.builtin.shell: |
+    chroot /mnt/{{ bootstrap_mount }} /bin/bash << 'CHROOT_EOF'
+      set -euo pipefail
+      echo "DROPBEAR=y" > /etc/dropbear/initramfs/dropbear.conf
+      mkdir -p /etc/dropbear/initramfs
+      echo "{{ pi_ssh_public_key }}" > /etc/dropbear/initramfs/authorized_keys
+      chmod 0600 /etc/dropbear/initramfs/authorized_keys
+    CHROOT_EOF
+  changed_when: true
+
+- name: Configure initramfs networking inside chroot
+  ansible.builtin.shell: |
+    chroot /mnt/{{ bootstrap_mount }} /bin/bash << 'CHROOT_EOF'
+      set -euo pipefail
+      # MODULES=most, DEVICE=eth0, static IP
+      sed -i 's/^MODULES=.*/MODULES=most/' /etc/initramfs-tools/initramfs.conf
+      sed -i 's/^DEVICE=.*/DEVICE=eth0/' /etc/initramfs-tools/initramfs.conf
+      IP_LINE="IP={{ pi_net_address | replace('/', ':') }}::{{ pi_net_gateway }}:255.255.254.0:{{ pi_hostname }}:eth0:off"
+      if grep -q '^IP=' /etc/initramfs-tools/initramfs.conf; then
+        sed -i "s|^IP=.*|${IP_LINE}|" /etc/initramfs-tools/initramfs.conf
+      else
+        echo "${IP_LINE}" >> /etc/initramfs-tools/initramfs.conf
+      fi
+    CHROOT_EOF
+  changed_when: true
+
+- name: Add kernel modules for initramfs
+  ansible.builtin.shell: |
+    chroot /mnt/{{ bootstrap_mount }} /bin/bash -c \
+      'echo -e "{{ pi_kernel_modules | trim }}" >> /etc/initramfs-tools/modules'
+  changed_when: true
+
+- name: Detect kernel version inside chroot
+  ansible.builtin.shell: |
+    chroot /mnt/{{ bootstrap_mount }} /bin/bash -c \
+      'ls /lib/modules/ | sort -V | tail -1'
+  register: kernel_version_result
+  changed_when: false
+
+- name: Set kernel_version fact
+  ansible.builtin.set_fact:
+    pi_kernel_version: "{{ kernel_version_result.stdout.strip() }}"
+
+- name: Configure /boot/cmdline.txt inside chroot
+  ansible.builtin.shell: |
+    chroot /mnt/{{ bootstrap_mount }} /bin/bash -c \
+      'echo "console=serial0,115200 console=tty1 root=/dev/mapper/crypted cryptdevice=UUID={{ luks_uuid }}:crypted rootfstype=ext4 fsck.repair=yes ip={{ pi_net_address | replace("/", ":") }}::{{ pi_net_gateway }}:255.255.254.0:{{ pi_hostname }}:eth0:off rootwait" > /boot/cmdline.txt'
+  changed_when: true
+
+- name: Configure /boot/config.txt inside chroot
+  ansible.builtin.shell: |
+    chroot /mnt/{{ bootstrap_mount }} /bin/bash << 'CHROOT_EOF'
+      set -euo pipefail
+      # Disable auto-initramfs detection, set custom initramfs
+      if grep -q "^auto_initramfs" /boot/config.txt 2>/dev/null; then
+        sed -i 's/^auto_initramfs.*/auto_initramfs=0/' /boot/config.txt
+      else
+        echo "auto_initramfs=0" >> /boot/config.txt
+      fi
+      if grep -q "^initramfs" /boot/config.txt 2>/dev/null; then
+        sed -i 's|^initramfs.*|initramfs {{ pi_initramfs_name }} followkernel|' /boot/config.txt
+      else
+        echo "initramfs {{ pi_initramfs_name }} followkernel" >> /boot/config.txt
+      fi
+    CHROOT_EOF
+  changed_when: true
+
+- name: Build initramfs inside chroot
+  ansible.builtin.shell: |
+    chroot /mnt/{{ bootstrap_mount }} /bin/bash -c \
+      'update-initramfs -u -k {{ pi_kernel_version }}'
+  register: uir_result
+  changed_when: uir_result.rc == 0
+  timeout: 300000
+
+# ── User setup inside chroot ────────────────────────────
+
+- name: Set root password inside chroot
+  ansible.builtin.shell: |
+    chroot /mnt/{{ bootstrap_mount }} /bin/bash -c \
+      'echo root:{{ root_password }} | chpasswd'
+  changed_when: true
+  no_log: true
+
+- name: Create user inside chroot
+  ansible.builtin.shell: |
+    chroot /mnt/{{ bootstrap_mount }} /bin/bash -c \
+      'useradd -m -G sudo -s /bin/bash {{ user_name }} 2>/dev/null; true'
+  changed_when: true
+
+- name: Set user password inside chroot
+  ansible.builtin.shell: |
+    chroot /mnt/{{ bootstrap_mount }} /bin/bash -c \
+      'echo {{ user_name }}:{{ user_password }} | chpasswd'
+  changed_when: true
+  no_log: true
+
+- name: Create user .ssh and authorized_keys inside chroot
+  ansible.builtin.shell: |
+    chroot /mnt/{{ bootstrap_mount }} /bin/bash -c \
+      'mkdir -p /home/{{ user_name }}/.ssh && chmod 700 /home/{{ user_name }}/.ssh && echo "{{ pi_ssh_public_key }}" > /home/{{ user_name }}/.ssh/authorized_keys && chmod 600 /home/{{ user_name }}/.ssh/authorized_keys && chown -R {{ user_name }}:{{ user_name }} /home/{{ user_name }}/.ssh'
+  changed_when: true
+
+- name: Harden SSH inside chroot
+  ansible.builtin.shell: |
+    chroot /mnt/{{ bootstrap_mount }} /bin/bash -c \
+      'mkdir -p /etc/ssh/sshd_config.d && echo -e "PasswordAuthentication no\nPermitRootLogin no\nPubkeyAuthentication yes\nAuthenticationMethods publickey" > /etc/ssh/sshd_config.d/10-hardening.conf && chmod 0600 /etc/ssh/sshd_config.d/10-hardening.conf'
+  changed_when: true
+
+- name: Enable services inside chroot
+  ansible.builtin.shell: |
+    chroot /mnt/{{ bootstrap_mount }} /bin/bash -c \
+      'systemctl enable sshd avahi-daemon 2>/dev/null; true'
+  changed_when: true
+
+- name: Disable swap for k3s/docker compatibility
+  ansible.builtin.shell: |
+    chroot /mnt/{{ bootstrap_mount }} /bin/bash -c '
+      swapoff -a
+      systemctl mask swap.target
+      dphys-swapfile swapoff 2>/dev/null || true
+      dphys-swapfile uninstall 2>/dev/null || true
+      systemctl disable dphys-swapfile 2>/dev/null || true
+      sed -i "/swap/d" /etc/fstab 2>/dev/null || true
+    '
+  changed_when: true

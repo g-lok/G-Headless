@@ -1,0 +1,63 @@
+---
+# ── Raspberry Pi 5: Bootstrap LUKS + SSH unlock on image ───
+# Takes a Pi OS Lite 64-bit image, creates a LUKS-encrypted
+# copy with dropbear SSH for remote unlock.
+#
+# Prerequisites:
+#   - Pi OS Lite image in files/pi-base.img (download from rpi site)
+#   - qemu-user-static + binfmt-support for ARM chroot
+#   - cryptsetup, parted, kpartx/losetup, rsync
+#
+# Run: ansible-playbook bootstrap-pi.yml -K
+#
+# Output: files/pi-luks.img — dd this to SD/SSD for Pi 5
+
+- name: Bootstrap Pi 5 LUKS image
+  hosts: localhost
+  gather_facts: true
+  vars_files:
+    - config.yml
+    - vault.yml
+
+  pre_tasks:
+    - name: Ensure running as root
+      ansible.builtin.shell:
+        cmd: "id -u"
+      register: uid_result
+      changed_when: false
+
+    - name: Assert root
+      ansible.builtin.fail:
+        msg: "Must run as root (loop device + cryptsetup ops). Use: sudo -E ansible-playbook bootstrap-pi.yml"
+      when: uid_result.stdout | int != 0
+
+    - name: Verify base image exists
+      ansible.builtin.stat:
+        path: "{{ pi_base_image }}"
+      register: base_img_stat
+
+    - name: Fail if base image not found
+      ansible.builtin.fail:
+        msg: "Base image {{ pi_base_image }} not found. Download Pi OS Lite 64-bit first."
+      when: not base_img_stat.stat.exists
+
+    - name: Check for qemu-user-static
+      ansible.builtin.command:
+        cmd: which qemu-aarch64-static
+      register: qemu_check
+      changed_when: false
+      failed_when: false
+
+    - name: Fail if qemu-user-static missing
+      ansible.builtin.fail:
+        msg: "qemu-aarch64-static not found. Install qemu-user-static + binfmt-support."
+      when: qemu_check.rc != 0
+
+    - name: Warn about destructive operation
+      ansible.builtin.pause:
+        prompt: >-
+          Will create {{ pi_output_image }} from {{ pi_base_image }}.
+          This DESTROYS any existing output image. Continue? Type 'yes'
+
+  roles:
+    - role: bootstrap-pi

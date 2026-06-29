@@ -1,0 +1,74 @@
+---
+# ── Example Configuration ────────────────────────────────
+# Copy this to config.yml and customize for your setup.
+# Secrets should be in vault.yml or passed via --extra-vars.
+
+# ── Target disk (x86_64 only) ──────────────────────────────
+# Find with: lsblk
+bootstrap_target_disk: /dev/sdb
+
+# ── Partition sizing ─────────────────────────────────────
+# Set to 0 for full disk, or specify GB for minimal image
+# When > 0, an image will be created at bootstrap_image_path
+bootstrap_partition_size_gb: 0
+bootstrap_create_image: true
+bootstrap_image_path: "{{ playbook_dir }}/files/bootstrap-image.img"
+
+# ── LUKS configuration ───────────────────────────────────
+bootstrap_luks_mapper_name: cryptroot
+bootstrap_luks_label: CRYPTROOT
+bootstrap_luks_cipher: aes-xts-plain64
+bootstrap_luks_key_size: 512
+bootstrap_luks_pbkdf: argon2id
+
+# ── Filesystem ───────────────────────────────────────────
+# Options: btrfs, ext4, xfs (x86_64 only; Pi always uses ext4)
+bootstrap_filesystem: btrfs
+bootstrap_fs_label: rootfs
+
+# ── btrfs options ────────────────────────────────────────
+bootstrap_btrfs_opts: "compress=zstd,noatime,ssd"
+bootstrap_btrfs_subvolumes:
+  - { path: /, name: "@" }
+  - { path: /home, name: "@home" }
+  - { path: /.snapshots, name: "@snapshots" }
+  - { path: /var/log, name: "@var_log" }
+  - { path: /var/cache, name: "@var_cache" }
+
+# ── Container subvolumes (btrfs only) ────────────────────
+# Set to true for k3s/docker workloads
+bootstrap_container_subvolumes: false
+
+# ── System configuration ─────────────────────────────────
+bootstrap_hostname: myserver
+bootstrap_timezone: America/New_York
+bootstrap_locale: en_US.UTF-8
+bootstrap_kernel: linux  # or linux-zen for Arch
+
+# ── Network ──────────────────────────────────────────────
+bootstrap_net_method: dhcp  # dhcp or static
+bootstrap_net_address: ""   # e.g., 192.168.1.100/24 (static only)
+bootstrap_net_gateway: ""   # e.g., 192.168.1.1 (static only)
+bootstrap_net_iface: "en*"  # x86_64; Pi uses eth0
+
+# ── User configuration ───────────────────────────────────
+bootstrap_user_name: admin
+bootstrap_user_shell: /bin/bash
+bootstrap_user_groups: [wheel]  # or [sudo] for Debian
+bootstrap_ssh_public_key: "ssh-ed25519 AAAA... your-key-here"
+
+# ── Swap configuration ───────────────────────────────────
+# Set to true to disable swap (recommended for k3s/docker)
+bootstrap_disable_swap: false
+
+# ── Pi-specific (bootstrap-pi.yml only) ─────────────────
+# Pi model: 3, 4, or 5 (determines initramfs name and kernel modules)
+bootstrap_pi_model: 5
+bootstrap_pi_base_image: "{{ playbook_dir }}/files/pi-base.img"
+bootstrap_pi_output_image: "{{ playbook_dir }}/files/pi-luks.img"
+
+# ── Secrets ──────────────────────────────────────────────
+# Define in vault.yml or pass via --extra-vars:
+#   bootstrap_luks_password: "your-luks-password"
+#   bootstrap_root_password: "your-root-password"
+#   bootstrap_user_password: "your-user-password"

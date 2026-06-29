@@ -1,0 +1,9 @@
+# Ignore large binaries not suitable for version control
+# Pi OS Lite base image (raw decompressed, ~3-4 GB)
+files/pi-base.img
+# Output image from gpi bootstrap (~3-5 GB)
+files/gpi-luks.img
+# Vendored AUR packages (built locally)
+files/*.pkg.tar.zst
+# Ansible collections (installed via ansible-galaxy)
+collections/

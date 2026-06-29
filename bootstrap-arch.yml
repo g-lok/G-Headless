@@ -1,0 +1,116 @@
+---
+# ── x86_64: Bootstrap Arch Linux on NVMe ──────────────
+# Workstation-based: target NVMe in USB enclosure.
+#
+# Usage:
+#   ansible-playbook bootstrap-arch.yml --ask-become-pass --ask-vault-pass
+#
+# Or with extra-vars for secrets:
+#   ansible-playbook bootstrap-arch.yml --ask-become-pass \
+#     -e bootstrap_luks_password=xxx \
+#     -e bootstrap_root_password=xxx \
+#     -e bootstrap_user_password=xxx
+#
+# Phases:
+#   1. partition  — GPT, EFI, LUKS, filesystem
+#   2. bootstrap  — pacstrap + chroot base config (UKI, mkinitcpio, tinyssh)
+#   3. network    — systemd-networkd, avahi, mDNS
+#   4. cleanup    — unmount, summary, optional imaging
+
+- name: Bootstrap Arch Linux on NVMe for x86_64
+  hosts: localhost
+  gather_facts: true
+  vars_files:
+    - config.yml
+
+  pre_tasks:
+    - name: Verify required variables
+      ansible.builtin.assert:
+        that:
+          - bootstrap_target_disk is defined
+          - bootstrap_ssh_public_key is defined
+          - bootstrap_ssh_public_key | length > 0
+          - bootstrap_luks_password is defined
+          - bootstrap_root_password is defined
+          - bootstrap_user_password is defined
+        fail_msg: "Required variables missing. Check config.yml or pass via --extra-vars."
+
+    - name: Verify target disk exists
+      ansible.builtin.stat:
+        path: "{{ bootstrap_target_disk }}"
+      register: disk_stat
+      become: true
+
+    - name: Fail if target disk not found
+      ansible.builtin.fail:
+        msg: "Target disk {{ bootstrap_target_disk }} not found — is USB enclosure connected?"
+      when: not disk_stat.stat.exists
+
+    - name: Verify vendored AUR package exists
+      ansible.builtin.fail:
+        msg: >
+          No mkinitcpio-systemd-extras package found in files/.
+          Build it first: 'git clone https://aur.archlinux.org/mkinitcpio-systemd-extras.git && makepkg -sc'
+          then copy .pkg.tar.zst to files/.
+      when:
+        - lookup('fileglob', playbook_dir ~ '/files/mkinitcpio-systemd-extras-*.pkg.tar.zst') | length == 0
+
+    - name: Check sgdisk available
+      ansible.builtin.command:
+        cmd: which sgdisk
+      register: sgdisk_check
+      changed_when: false
+      failed_when: false
+
+    - name: Fail if sgdisk not found
+      ansible.builtin.fail:
+        msg: "sgdisk not found. Install gptfdisk (Arch) or gdisk (Debian/Ubuntu)."
+      when: sgdisk_check.rc != 0
+
+    - name: Check pacstrap available
+      ansible.builtin.command:
+        cmd: which pacstrap
+      register: pacstrap_check
+      changed_when: false
+      failed_when: false
+
+    - name: Fail if pacstrap not found
+      ansible.builtin.fail:
+        msg: "pacstrap not found. Install arch-install-scripts."
+      when: pacstrap_check.rc != 0
+
+    - name: Warn about destructive operation
+      ansible.builtin.pause:
+        prompt: >-
+          WARNING: {{ bootstrap_target_disk }} will be DESTROYED.
+          Type 'yes' to continue
+
+  roles:
+    - role: bootstrap-arch
+      become: true
+
+  post_tasks:
+    - name: Create disk image (if partition_size_gb > 0)
+      when:
+        - bootstrap_partition_size_gb | int > 0
+        - bootstrap_create_image | bool
+      block:
+        - name: Calculate image size
+          ansible.builtin.set_fact:
+            image_size_mb: "{{ (bootstrap_partition_size_gb | int * 1024) + 64 }}"  # +64MB for GPT
+
+        - name: Create image directory
+          ansible.builtin.file:
+            path: "{{ bootstrap_image_path | dirname }}"
+            state: directory
+            mode: "0755"
+
+        - name: Create disk image
+          ansible.builtin.command:
+            cmd: "dd if={{ bootstrap_target_disk }} of={{ bootstrap_image_path }} bs=1M count={{ image_size_mb }} status=progress"
+          become: true
+          changed_when: true
+
+        - name: Display image location
+          ansible.builtin.debug:
+            msg: "Image created: {{ bootstrap_image_path }} ({{ image_size_mb }}MB)"

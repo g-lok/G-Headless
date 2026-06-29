@@ -1,0 +1,23 @@
+[project]
+name = "luks2-ssh-boot"
+version = "0.1.0"
+description = ""
+authors = [
+    {name = "Garrett Anderson",email = "g@devnull.rip"}
+]
+requires-python = ">=3.14"
+dependencies = [
+    "ansible (>=14.0.0,<15.0.0)",
+    "jinja2 (>=3.1.6,<4.0.0)"
+]
+[tool.poetry]
+package-mode = false
+
+[build-system]
+requires = ["poetry-core>=2.0.0,<3.0.0"]
+build-backend = "poetry.core.masonry.api"
+
+[dependency-groups]
+dev = [
+    "pytest (>=9.0.3,<10.0.0)"
+]

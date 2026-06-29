@@ -1,0 +1,77 @@
+---
+# ── Pi Phase 3: Copy initramfs, unmount, cleanup ───────────
+
+- name: Copy initramfs to FAT root (critical step)
+  ansible.builtin.shell: |
+    cp /mnt/{{ bootstrap_mount }}/boot/firmware/{{ pi_initramfs_name }} /mnt/{{ bootstrap_mount }}/boot/{{ pi_initramfs_name }} 2>/dev/null
+    ls -lh /mnt/{{ bootstrap_mount }}/boot/{{ pi_initramfs_name }} 2>/dev/null
+    ls -lh /mnt/{{ bootstrap_mount }}/boot/firmware/{{ pi_initramfs_name }} 2>/dev/null
+  register: initramfs_copy
+  changed_when: initramfs_copy.rc == 0
+  failed_when: initramfs_copy.stdout is not search(pi_initramfs_name)
+
+- name: Sync before unmount
+  ansible.builtin.shell:
+    cmd: sync
+  changed_when: false
+
+- name: Unmount chroot filesystems (reverse order)
+  ansible.builtin.shell:
+    cmd: |
+      for d in run sys proc dev/pts dev boot; do
+        umount -l /mnt/{{ bootstrap_mount }}/$d 2>/dev/null || true
+      done
+      umount -l /mnt/{{ bootstrap_mount }} 2>/dev/null || true
+  changed_when: true
+
+- name: Force-close LUKS on target image
+  ansible.builtin.shell:
+    cmd: |
+      cryptsetup close crypted 2>/dev/null || dmsetup remove -f crypted 2>/dev/null || true
+      udevadm settle
+  changed_when: false
+  failed_when: false
+
+- name: Detach target image loop device
+  ansible.builtin.shell:
+    cmd: "losetup -d {{ tgt_loop }}"
+  changed_when: true
+  failed_when: false
+
+- name: Detach source image loop device
+  ansible.builtin.shell:
+    cmd: "losetup -d {{ src_loop }}"
+  changed_when: true
+  failed_when: false
+
+- name: Remove temp LUKS keyfile
+  ansible.builtin.file:
+    path: /tmp/luks-keyfile
+    state: absent
+  no_log: true
+
+- name: Remove mount directory
+  ansible.builtin.file:
+    path: /mnt/{{ bootstrap_mount }}
+    state: absent
+
+- name: Print summary
+  ansible.builtin.debug:
+    msg:
+      - "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+      - "Pi LUKS bootstrap COMPLETE"
+      - "Target: Raspberry Pi {{ bootstrap_pi_model }}"
+      - "Output: {{ pi_output_image }}"
+      - "Hostname: {{ pi_hostname }}"
+      - "LUKS UUID: {{ luks_uuid }}"
+      - "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+      - "Next steps:"
+      - "  1. Write image to SD/SSD:"
+      - "     dd if={{ pi_output_image }} of=/dev/sdX bs=4M status=progress"
+      - "  2. Insert SD/SSD in Raspberry Pi {{ bootstrap_pi_model }}"
+      - "  3. Connect power + Ethernet"
+      - "  4. SSH to initramfs (dropbear):"
+      - "     ssh root@{{ pi_net_address.split('/')[0] }}"
+      - "  5. Run 'cryptroot-unlock' to unlock"
+      - "  6. System boots -> run gloco-ansible pi role"
+      - "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
