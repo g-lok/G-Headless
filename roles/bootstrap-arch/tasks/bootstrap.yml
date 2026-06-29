@@ -172,10 +172,23 @@
 
 # ── User setup ─────────────────────────────────────────
 
-- name: Set root password
+- name: Write root password to chroot temp file
+  ansible.builtin.copy:
+    content: "root:{{ bootstrap_root_password }}\n"
+    dest: /mnt/{{ bootstrap_mount }}/root/.pw_root
+    mode: '0600'
+  no_log: true
+
+- name: Set root password via chpasswd
   ansible.builtin.shell:
-    cmd: "arch-chroot /mnt/{{ bootstrap_mount }} sh -c 'echo root:{{ bootstrap_root_password }} | chpasswd'"
+    cmd: "arch-chroot /mnt/{{ bootstrap_mount }} chpasswd < /root/.pw_root"
   changed_when: true
+  no_log: true
+
+- name: Remove root password temp file
+  ansible.builtin.file:
+    path: /mnt/{{ bootstrap_mount }}/root/.pw_root
+    state: absent
   no_log: true
 
 - name: Create user
@@ -189,10 +202,23 @@
   changed_when: useradd_result.rc == 0
   failed_when: useradd_result.rc != 0 and useradd_result.rc != 9
 
-- name: Set user password
+- name: Write user password to chroot temp file
+  ansible.builtin.copy:
+    content: "{{ bootstrap_user_name }}:{{ bootstrap_user_password }}\n"
+    dest: /mnt/{{ bootstrap_mount }}/root/.pw_user
+    mode: '0600'
+  no_log: true
+
+- name: Set user password via chpasswd
   ansible.builtin.shell:
-    cmd: "arch-chroot /mnt/{{ bootstrap_mount }} sh -c 'echo {{ bootstrap_user_name }}:{{ bootstrap_user_password }} | chpasswd'"
+    cmd: "arch-chroot /mnt/{{ bootstrap_mount }} chpasswd < /root/.pw_user"
   changed_when: true
+  no_log: true
+
+- name: Remove user password temp file
+  ansible.builtin.file:
+    path: /mnt/{{ bootstrap_mount }}/root/.pw_user
+    state: absent
   no_log: true
 
 - name: Enable sudo for wheel group
