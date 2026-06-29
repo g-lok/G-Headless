@@ -78,7 +78,7 @@ After pacstrap, `vmlinuz-linux` may be missing from `/boot/`. Defensive reinstal
 
 ### LUKS password via keyfile, not shell piping
 
-`echo "{{ password }}" | cryptsetup` and `printf '%s\n' "{{ password }}" | cryptsetup` break if password contains shell metacharacters (`$`, `\`, `%`, `"`, etc). `printf` interprets `%` as format specifiers. `echo` mangles backslash escapes.
+`echo "{{ password }}" | cryptsetup` and `printf '%s\n' "{{ password }}" | cryptsetup` break if password contains shell metacharacters (`$`, `\`, `%`, `"`, etc). `printf` interprets `%` as format specifiers. `echo` mangles backslash escapes. **Same bug applies to `echo user:password | chpasswd`** — use the same temp-file approach.
 
 **Pattern:** Write password to temp keyfile (`/tmp/luks-keyfile` with `mode: 0600`), pass via `--key-file=/tmp/luks-keyfile` using `ansible.builtin.command` with `argv` (no shell). Remove keyfile after use.
 
@@ -126,6 +126,27 @@ The Pi playbook supports Pi 3, 4, and 5. Set `bootstrap_pi_model` in config.yml 
 - Initramfs name: `initramfs_2710` (Pi 3), `initramfs_2711` (Pi 4), `initramfs_2712` (Pi 5)
 - Kernel modules: ARMv8 crypto for Pi 3, ARMv8 CE crypto for Pi 4/5
 
+### LUKS mapper cleanup — dual approach
+
+Both cleanup and emergency-cleanup use two methods:
+1. **Device-path matching** — iterate all dmsetup, `cryptsetup status` to get device, grep for `bootstrap_target_disk`
+2. **Mapper-name matching** — `dmsetup ls | grep "^{{ bootstrap_luks_mapper_name }}"` catches `root` and `root-*`
+
+Use both for defense in depth.
+
+### btrfs subvol=@ in kernel cmdline
+
+For btrfs: `rootflags=subvol=@,x-systemd.device-timeout=0`. Without `subvol=@`, systemd mounts top-level btrfs (empty subvolume dirs) → no init → switch_root fails → emergency loop. **Must be conditional** — ext4/xfs don't use subvol.
+
+Similarly `MODULES=(igc btrfs)` in mkinitcpio.conf must be conditional — only include `btrfs` module when `bootstrap_filesystem == 'btrfs'`.
+
+### Root mount opts must be filesystem-aware
+
+Split root mount task into two with `when:` guards:
+- btrfs: `opts: "{{ bootstrap_btrfs_opts }},subvol=@"` 
+- ext4/xfs: `opts: defaults`
+Never append `,subvol=@` for non-btrfs filesystems — mount fails.
+
 ## Commands
 
 ```bash
@@ -141,7 +162,7 @@ ansible-playbook playbooks/post-bootstrap/resize.yml -e target_disk=/dev/nvme0n1
 
 ## Vault
 
-Secrets can be in `vault.yml` encrypted with Ansible Vault, or passed via `--extra-vars`. Variables: `bootstrap_luks_password`, `bootstrap_root_password`, `bootstrap_user_password`.
+Secrets can be in `vault.yml` encrypted with Ansible Vault, or passed via `--extra-vars`. Variables: `bootstrap_luks_password`, `bootstrap_user_password`. Root password is not managed — locked by default (sudo-based access).
 
 ## Config
 

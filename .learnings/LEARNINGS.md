@@ -105,3 +105,11 @@ Similarly `bootstrap.yml` had unconditional `MODULES=(igc btrfs)` — `btrfs` mo
 ### Stale mapper cleanup: match ^root not ^root-
 
 The host has no `root` LUKS mapper — all `root*` mappers on the host belong to the playbook's target disk. Grep pattern should match `^{{ luks_mapper_name }}` (catches `root` and `root-*`) not `^{{ luks_mapper_name }}-` (misses `root`). This applies when using a unique per-playbook mapper name prefix like `root`.
+
+### chpasswd via echo breaks with shell metacharacters
+
+`echo user:{{ password }} | chpasswd` (inside arch-chroot or chroot) has the same shell quoting bug as the LUKS password issue. Fix: write `user:password` content via `ansible.builtin.copy` to a file inside the chroot (at `/root/.pw_user`, avoiding the shadowed /tmp), then `arch-chroot /mnt chpasswd < /root/.pw_user`, then remove the temp file.
+
+### Root password should not be set
+
+Arch and Debian/RPi OS both default to locked root (no password). Don't set a root password — user logs in as themselves and `sudo -i` to become root. Locked root prevents console/SSH brute-force on the `root` account. Remove root password setup entirely from playbooks.
