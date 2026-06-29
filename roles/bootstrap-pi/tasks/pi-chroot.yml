@@ -133,7 +133,7 @@
       set -euo pipefail
       echo "DROPBEAR=y" > /etc/dropbear/initramfs/dropbear.conf
       mkdir -p /etc/dropbear/initramfs
-      echo "{{ pi_ssh_public_key }}" > /etc/dropbear/initramfs/authorized_keys
+      echo "{{ bootstrap_ssh_public_key }}" > /etc/dropbear/initramfs/authorized_keys
       chmod 0600 /etc/dropbear/initramfs/authorized_keys
     CHROOT_EOF
   changed_when: true
@@ -208,12 +208,12 @@
 - name: Create user inside chroot
   ansible.builtin.shell: |
     chroot /mnt/{{ bootstrap_mount }} /bin/bash -c \
-      'useradd -m -G sudo -s /bin/bash {{ user_name }} 2>/dev/null; true'
+      'useradd -m -G sudo -s /bin/bash {{ bootstrap_user_name }} 2>/dev/null; true'
   changed_when: true
 
 - name: Write user password to chroot temp file
   ansible.builtin.copy:
-    content: "{{ user_name }}:{{ user_password }}\n"
+    content: "{{ bootstrap_user_name }}:{{ bootstrap_user_password }}\n"
     dest: /mnt/{{ bootstrap_mount }}/root/.pw_user
     mode: '0600'
   no_log: true
@@ -233,7 +233,7 @@
 - name: Create user .ssh and authorized_keys inside chroot
   ansible.builtin.shell: |
     chroot /mnt/{{ bootstrap_mount }} /bin/bash -c \
-      'mkdir -p /home/{{ user_name }}/.ssh && chmod 700 /home/{{ user_name }}/.ssh && echo "{{ pi_ssh_public_key }}" > /home/{{ user_name }}/.ssh/authorized_keys && chmod 600 /home/{{ user_name }}/.ssh/authorized_keys && chown -R {{ user_name }}:{{ user_name }} /home/{{ user_name }}/.ssh'
+      'mkdir -p /home/{{ bootstrap_user_name }}/.ssh && chmod 700 /home/{{ bootstrap_user_name }}/.ssh && echo "{{ bootstrap_ssh_public_key }}" > /home/{{ bootstrap_user_name }}/.ssh/authorized_keys && chmod 600 /home/{{ bootstrap_user_name }}/.ssh/authorized_keys && chown -R {{ bootstrap_user_name }}:{{ bootstrap_user_name }} /home/{{ bootstrap_user_name }}/.ssh'
   changed_when: true
 
 - name: Harden SSH inside chroot

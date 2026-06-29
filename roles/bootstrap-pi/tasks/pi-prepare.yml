@@ -102,7 +102,7 @@
 
 - name: Write LUKS password to temp keyfile (avoids shell quoting issues)
   ansible.builtin.copy:
-    content: "{{ luks_password }}"
+    content: "{{ bootstrap_luks_password }}"
     dest: /tmp/luks-keyfile
     mode: '0600'
   no_log: true
