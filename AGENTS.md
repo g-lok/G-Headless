@@ -82,6 +82,8 @@ After pacstrap, `vmlinuz-linux` may be missing from `/boot/`. Defensive reinstal
 
 **Pattern:** Write password to temp keyfile (`/tmp/luks-keyfile` with `mode: 0600`), pass via `--key-file=/tmp/luks-keyfile` using `ansible.builtin.command` with `argv` (no shell). Remove keyfile after use.
 
+**chpasswd variant:** Write `user:password\n` to `/mnt/{{ bootstrap_mount }}/root/.pw_user` via `ansible.builtin.copy`. Run `arch-chroot /mnt/{{ bootstrap_mount }} chpasswd < /mnt/{{ bootstrap_mount }}/root/.pw_user`. The `< /path` redirect runs on the HOST shell, so use the full host path.
+
 ```yaml
 - name: Write LUKS password to temp keyfile
   ansible.builtin.copy:

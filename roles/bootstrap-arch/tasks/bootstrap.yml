@@ -192,7 +192,7 @@
 
 - name: Set user password via chpasswd
   ansible.builtin.shell:
-    cmd: "arch-chroot /mnt/{{ bootstrap_mount }} chpasswd < /root/.pw_user"
+    cmd: "arch-chroot /mnt/{{ bootstrap_mount }} chpasswd < /mnt/{{ bootstrap_mount }}/root/.pw_user"
   changed_when: true
   no_log: true
 
