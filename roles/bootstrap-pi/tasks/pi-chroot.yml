@@ -205,24 +205,29 @@
 
 # ── User setup inside chroot ────────────────────────────
 
-- name: Set root password inside chroot
-  ansible.builtin.shell: |
-    chroot /mnt/{{ bootstrap_mount }} /bin/bash -c \
-      'echo root:{{ root_password }} | chpasswd'
-  changed_when: true
-  no_log: true
-
 - name: Create user inside chroot
   ansible.builtin.shell: |
     chroot /mnt/{{ bootstrap_mount }} /bin/bash -c \
       'useradd -m -G sudo -s /bin/bash {{ user_name }} 2>/dev/null; true'
   changed_when: true
 
-- name: Set user password inside chroot
-  ansible.builtin.shell: |
-    chroot /mnt/{{ bootstrap_mount }} /bin/bash -c \
-      'echo {{ user_name }}:{{ user_password }} | chpasswd'
+- name: Write user password to chroot temp file
+  ansible.builtin.copy:
+    content: "{{ user_name }}:{{ user_password }}\n"
+    dest: /mnt/{{ bootstrap_mount }}/root/.pw_user
+    mode: '0600'
+  no_log: true
+
+- name: Set user password via chpasswd
+  ansible.builtin.shell:
+    cmd: "chroot /mnt/{{ bootstrap_mount }} chpasswd < /root/.pw_user"
   changed_when: true
+  no_log: true
+
+- name: Remove user password temp file
+  ansible.builtin.file:
+    path: /mnt/{{ bootstrap_mount }}/root/.pw_user
+    state: absent
   no_log: true
 
 - name: Create user .ssh and authorized_keys inside chroot
