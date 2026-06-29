@@ -92,3 +92,15 @@
 **Fix:** Write password to temp keyfile (`/tmp/luks-keyfile` with `mode: 0600`), pass via `--key-file=/tmp/luks-keyfile` using `ansible.builtin.command` with `argv` (no shell interpretation). Remove keyfile after use.
 
 **Files:** `roles/bootstrap-arch/tasks/partition.yml`, `roles/bootstrap-pi/tasks/pi-prepare.yml`
+
+---
+
+## 6. jj rebase drops files not in commit's own diff
+
+**Symptom:** After `jj rebase -r X -d root()`, the new root commit has only files that were modified in X's diff. All other repo files from X's parent are lost.
+
+**Root cause:** `jj rebase` only carries the commit's own diff (what X changed vs its parent), not X's full tree. If X's parent has files, they're dropped when rebasing onto root (which has nothing).
+
+**Fix:** Use `jj new root()` → `jj restore --from PARENT --into @ .` to copy full tree first, then apply modifications on top.
+
+**Files:** This file — it happened here.

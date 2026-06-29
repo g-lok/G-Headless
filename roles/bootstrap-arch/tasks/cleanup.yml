@@ -25,6 +25,16 @@
   changed_when: false
   failed_when: false
 
+- name: Close any remaining stale mappers by name
+  ansible.builtin.shell:
+    cmd: |
+      for map in $(dmsetup ls 2>/dev/null | grep "^{{ bootstrap_luks_mapper_name }}" | cut -f1); do
+        cryptsetup close "$map" 2>&1 || dmsetup remove -f "$map" 2>&1 || true
+      done
+      udevadm settle
+  changed_when: false
+  failed_when: false
+
 - name: Remove temp LUKS keyfile
   ansible.builtin.file:
     path: /tmp/luks-keyfile
