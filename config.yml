@@ -56,6 +56,9 @@ bootstrap_pi_base_image: "{{ playbook_dir }}/files/pi-base.img"
 bootstrap_pi_output_image: "{{ playbook_dir }}/files/pi-luks.img"
 
 # ── Secrets (from vault.yml) ───────────────────────────
+# Define in vault.yml or pass via --extra-vars:
+#   vault_luks_password: "your-luks-password"
+#   vault_user_password: "your-user-password"
+# Root password is NOT set (locked by default — use sudo).
 bootstrap_luks_password: "{{ vault_luks_password }}"
-bootstrap_root_password: "{{ vault_root_password }}"
 bootstrap_user_password: "{{ vault_user_password }}"
