@@ -164,7 +164,7 @@ ansible-playbook playbooks/post-bootstrap/resize.yml -e target_disk=/dev/nvme0n1
 
 ## Vault
 
-Secrets can be in `vault.yml` encrypted with Ansible Vault, or passed via `--extra-vars`. Convention: `config.yml` uses `{{ vault_luks_password }}` / `{{ vault_user_password }}` indirection. Define `vault_luks_password` and `vault_user_password` in `vault.yml`, or define `bootstrap_luks_password`/`bootstrap_user_password` directly. Root password is not managed — locked by default (sudo-based access).
+Secrets can be in `vault.yml` encrypted with Ansible Vault, or passed via `--extra-vars`. Convention: `vault.yml` defines `bootstrap_luks_password` and `bootstrap_user_password` directly (no indirection). Stub `vault.yml` is committed to the repo — users fill in values and encrypt. Root password is not managed — locked by default (sudo-based access).
 
 ## Config
 

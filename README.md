@@ -61,17 +61,26 @@ cp config.yml.example config.yml
 
 ### 2. Prepare secrets
 
-Create a vault file or use extra-vars:
+Edit the stub `vault.yml` (already in repo) with your values, then encrypt:
 
 ```bash
-# Option A: Create vault file
-ansible-vault create vault.yml
-# Add:
-# bootstrap_luks_password: "your-luks-password"
-# bootstrap_root_password: "your-root-password"
-# bootstrap_user_password: "your-user-password"
+# Edit vault.yml with your passwords
+vim vault.yml
+# (fill in bootstrap_luks_password and bootstrap_user_password)
 
-# Option B: Pass via command line (see usage below)
+# Encrypt it
+ansible-vault encrypt vault.yml
+
+# To edit later: ansible-vault decrypt vault.yml, edit, re-encrypt
+```
+
+Or skip the vault file and pass secrets via command line:
+
+```bash
+# Extra vars (no vault file needed)
+ansible-playbook bootstrap-arch.yml --ask-become-pass \
+  -e bootstrap_luks_password=xxx \
+  -e bootstrap_user_password=xxx
 ```
 
 ### 3. Run bootstrap
@@ -83,7 +92,6 @@ ansible-playbook bootstrap-arch.yml --ask-become-pass --ask-vault-pass
 # Or with extra-vars (no vault file needed)
 ansible-playbook bootstrap-arch.yml --ask-become-pass \
   -e bootstrap_luks_password=xxx \
-  -e bootstrap_root_password=xxx \
   -e bootstrap_user_password=xxx
 
 # Raspberry Pi 3/4/5

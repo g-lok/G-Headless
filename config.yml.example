@@ -68,11 +68,7 @@ bootstrap_pi_base_image: "{{ playbook_dir }}/files/pi-base.img"
 bootstrap_pi_output_image: "{{ playbook_dir }}/files/pi-luks.img"
 
 # ── Secrets ──────────────────────────────────────────────
-# Define in vault.yml or pass via --extra-vars:
-#   vault_luks_password: "your-luks-password"
-#   vault_user_password: "your-user-password"
-# Root password is NOT set (locked by default — use sudo).
-# vault.yml is loaded after config.yml, so vault values override.
-#
-# Or define bootstrap_luks_password/bootstrap_user_password directly
-# if you prefer not to use a separate vault indirection.
+# Edit vault.yml with your values, then encrypt:
+#   ansible-vault encrypt vault.yml
+# Or pass via --extra-vars:
+#   -e bootstrap_luks_password=xxx -e bootstrap_user_password=xxx
