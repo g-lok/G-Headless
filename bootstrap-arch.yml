@@ -8,7 +8,6 @@
 # Or with extra-vars for secrets:
 #   ansible-playbook bootstrap-arch.yml --ask-become-pass \
 #     -e bootstrap_luks_password=xxx \
-#     -e bootstrap_root_password=xxx \
 #     -e bootstrap_user_password=xxx
 #
 # Phases:
@@ -31,7 +30,6 @@
           - bootstrap_ssh_public_key is defined
           - bootstrap_ssh_public_key | length > 0
           - bootstrap_luks_password is defined
-          - bootstrap_root_password is defined
           - bootstrap_user_password is defined
         fail_msg: "Required variables missing. Check config.yml or pass via --extra-vars."
 
