@@ -161,6 +161,12 @@ Workstation auto-benchmarks Argon2 to ~1GB. Pi initramfs has limited RAM — emb
 
 **Fix:** `--pbkdf-memory=512000 --pbkdf-parallel=1` in `cryptsetup luksFormat`.
 
+### YAML `>` folded scalar adds trailing newline to cryptsetup key
+
+`cmd: >` (folded block scalar) appends `\n` to the command string. When `ansible.builtin.shell` passes `stdin` to cryptsetup via `--key-file=-`, the trailing `\n` becomes part of the encryption key. Later, typing the password without `\n` fails.
+
+**Fix:** Use `cmd: >-` (folded block strip scalar) — strips trailing whitespace/newlines.
+
 ### sd-tinyssh does not read /etc/tinyssh/root_key by default
 
 **Bug:** Playbook writes key to `/etc/tinyssh/root_key`, but the `sd-tinyssh` mkinitcpio hook defaults to `SD_TINYSSH_AUTHORIZED_KEYS=/root/.ssh/authorized_keys`. The initramfs is built without the authorized key → all SSH connections get `Permission denied (publickey)`.

@@ -102,7 +102,7 @@
 
 - name: LUKS2 format target root partition
   ansible.builtin.shell:
-    cmd: >
+    cmd: >-
       cryptsetup luksFormat --disable-locks --type=luks2
       --pbkdf-memory=512000 --pbkdf-parallel=1 --batch-mode
       --key-file=- "{{ tgt_root }}"
