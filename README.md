@@ -175,7 +175,9 @@ bootstrap_pi_model: 5  # 3, 4, or 5
 This determines the correct initramfs name and kernel modules for your Pi model:
 - Pi 3: Uses `initramfs_2710` with ARMv8 crypto modules
 - Pi 4: Uses `initramfs_2711` with ARMv8 CE crypto modules
-- Pi 5: Uses `initramfs_2712` with ARMv8 CE crypto modules
+- Pi 5: Uses `initramfs_2712` with ARMv8 CE crypto modules (has hardware AES — no performance penalty)
+
+> **Pi PBKDF memory note:** Cryptsetup auto-benchmarks Argon2 memory to ~1GB on the workstation. Pi initramfs has limited RAM and cannot allocate this much. The playbook caps PBKDF memory at 512MB. Do NOT override `--pbkdf-memory` unless you know what you're doing.
 
 ## Post-Bootstrap Tasks
 
