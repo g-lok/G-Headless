@@ -131,9 +131,9 @@
   ansible.builtin.copy:
     dest: /mnt/{{ bootstrap_mount }}/etc/mkinitcpio.conf
     content: |
-      MODULES=(igc{% if bootstrap_filesystem == 'btrfs' %} btrfs{% endif %})
+       MODULES=(igc{% if bootstrap_filesystem == 'btrfs' %} btrfs{% endif %})
       BINARIES=()
-      FILES=(/etc/crypttab.initramfs /etc/systemd/network/20-wired.network)
+      FILES=(/etc/crypttab.initramfs /etc/systemd/network/20-wired.network /usr/lib/udev/rules.d/75-net-description.rules /usr/lib/udev/rules.d/80-net-setup-link.rules /usr/lib/systemd/network/99-default.link)
       HOOKS=(base systemd autodetect microcode modconf kms keyboard sd-vconsole block sd-network sd-tinyssh sd-encrypt filesystems fsck)
       SD_TINYSSH_COMMAND="systemd-tty-ask-password-agent --query --watch"
     mode: "0644"
@@ -148,7 +148,6 @@
       rootflags={% if bootstrap_filesystem == 'btrfs' %}subvol=@,{% endif %}x-systemd.device-timeout=0
       rw
       quiet
-      ip={{ bootstrap_net_address }}::{{ bootstrap_net_gateway }}:255.255.254.0:{{ bootstrap_hostname }}:{{ net_iface | regex_replace('\\*', '') }}:none
     dest: /mnt/{{ bootstrap_mount }}/etc/kernel/cmdline
     mode: "0644"
 
@@ -183,23 +182,11 @@
   changed_when: useradd_result.rc == 0
   failed_when: useradd_result.rc != 0 and useradd_result.rc != 9
 
-- name: Write user password to chroot temp file
-  ansible.builtin.copy:
-    content: "{{ bootstrap_user_name }}:{{ bootstrap_user_password }}\n"
-    dest: /mnt/{{ bootstrap_mount }}/root/.pw_user
-    mode: '0600'
-  no_log: true
-
-- name: Set user password via chpasswd
+- name: Set user password via chpasswd (stdin)
   ansible.builtin.shell:
-    cmd: "arch-chroot /mnt/{{ bootstrap_mount }} chpasswd < /mnt/{{ bootstrap_mount }}/root/.pw_user"
+    cmd: "arch-chroot /mnt/{{ bootstrap_mount }} chpasswd"
+    stdin: "{{ bootstrap_user_name }}:{{ bootstrap_user_password }}"
   changed_when: true
-  no_log: true
-
-- name: Remove user password temp file
-  ansible.builtin.file:
-    path: /mnt/{{ bootstrap_mount }}/root/.pw_user
-    state: absent
   no_log: true
 
 - name: Enable sudo for wheel group
@@ -230,6 +217,7 @@
   ansible.builtin.copy:
     dest: /mnt/{{ bootstrap_mount }}/etc/ssh/sshd_config.d/10-hardening.conf
     content: |
+      Port {{ bootstrap_sshd_port }}
       PasswordAuthentication no
       PermitRootLogin no
       PubkeyAuthentication yes

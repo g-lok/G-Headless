@@ -68,6 +68,9 @@ bootstrap_container_subvolume_list:
   - { path: /var/lib/containerd, name: "@var_lib_containerd" }
   - { path: /var/lib/rancher, name: "@var_lib_rancher" }
 
+# ── SSH configuration ─────────────────────────────────────
+bootstrap_sshd_port: 22   # Set to non-standard port (e.g., 4455) for reduced scan noise
+
 # ── Secrets (must be provided via extra-vars or vault) ───
 # bootstrap_luks_password: ""
 # bootstrap_root_password: ""

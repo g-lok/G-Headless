@@ -46,6 +46,9 @@ bootstrap_ssh_public_key: ""  # Required: your SSH public key
 # Set to true to disable swap (recommended for k3s/docker)
 bootstrap_disable_swap: false
 
+# ── SSH configuration ─────────────────────────────────────
+bootstrap_sshd_port: 22   # Set to non-standard port (e.g., 4455) for reduced scan noise
+
 # ── Secrets (must be provided via extra-vars or vault) ───
 # bootstrap_luks_password: ""
 # bootstrap_root_password: ""

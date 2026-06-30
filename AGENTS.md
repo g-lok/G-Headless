@@ -76,31 +76,35 @@ After pacstrap, `vmlinuz-linux` may be missing from `/boot/`. Defensive reinstal
 
 `umount -R` fails on busy mounts. Always `umount -l -R`. LUKS close can also fail — iterate `dmsetup ls`, match to target disk, try `cryptsetup close`, fall back to `dmsetup remove -f`. Remove mount directory after unmount. Both Arch (`roles/bootstrap-arch/tasks/cleanup.yml`) and Pi (`roles/bootstrap-pi/tasks/cleanup.yml`) use this pattern.
 
-### LUKS password via keyfile, not shell piping
+### LUKS password via ansible.builtin.shell stdin (preferred)
 
-`echo "{{ password }}" | cryptsetup` and `printf '%s\n' "{{ password }}" | cryptsetup` break if password contains shell metacharacters (`$`, `\`, `%`, `"`, etc). `printf` interprets `%` as format specifiers. `echo` mangles backslash escapes. **Same bug applies to `echo user:password | chpasswd`** — use the same temp-file approach.
+`echo "{{ password }}" | cryptsetup` and `printf '%s\n' "{{ password }}" | cryptsetup` break if password contains shell metacharacters (`$`, `\`, `%`, `"`, etc). **Same bug applies to `echo user:password | chpasswd`**.
 
-**Pattern:** Write password to temp keyfile (`/tmp/luks-keyfile` with `mode: 0600`), pass via `--key-file=/tmp/luks-keyfile` using `ansible.builtin.command` with `argv` (no shell). Remove keyfile after use.
-
-**chpasswd variant:** Write `user:password\n` to `/mnt/{{ bootstrap_mount }}/root/.pw_user` via `ansible.builtin.copy`. Run `arch-chroot /mnt/{{ bootstrap_mount }} chpasswd < /mnt/{{ bootstrap_mount }}/root/.pw_user`. The `< /path` redirect runs on the HOST shell, so use the full host path.
+**Fix:** Use `ansible.builtin.shell` with `stdin:` parameter — Ansible passes input directly, no shell expansion. No temp files, no cleanup.
 
 ```yaml
-- name: Write LUKS password to temp keyfile
-  ansible.builtin.copy:
-    content: "{{ bootstrap_luks_password }}"
-    dest: /tmp/luks-keyfile
-    mode: '0600'
+- name: LUKS2 format root partition
+  ansible.builtin.shell:
+    cmd: "cryptsetup luksFormat --type=luks2 --key-file=- '{{ bootstrap_luks_part }}'"
+    stdin: "{{ bootstrap_luks_password }}"
   no_log: true
 
-- name: LUKS2 format root partition
-  ansible.builtin.command:
-    argv:
-      - cryptsetup
-      - luksFormat
-      - --type=luks2
-      - --key-file=/tmp/luks-keyfile
-      - "{{ bootstrap_luks_part }}"
+- name: Open LUKS container
+  ansible.builtin.shell:
+    cmd: "cryptsetup open --key-file=- '{{ bootstrap_luks_part }}' '{{ bootstrap_luks_mapper_name }}'"
+    stdin: "{{ bootstrap_luks_password }}"
+  no_log: true
+
+- name: Set user password via chpasswd
+  ansible.builtin.shell:
+    cmd: "arch-chroot /mnt/{{ bootstrap_mount }} chpasswd"
+    stdin: "{{ bootstrap_user_name }}:{{ bootstrap_user_password }}"
+  no_log: true
 ```
+
+The `--key-file=-` flag reads the password from stdin. The `stdin:` parameter in `ansible.builtin.shell` bypasses shell metacharacter issues entirely. No temp file to write or clean up.
+
+**chpasswd with `< /path` redirect (old pattern):** The redirect runs on the HOST shell, so path must include host mount prefix (`/mnt/{{ bootstrap_mount }}/root/.pw_user`). arch-chroot shadows `/tmp` with tmpfs — use `/root/` paths. This pattern is now superseded by the stdin approach above.
 
 ### Swap disabled for k3s/docker
 
@@ -141,6 +145,32 @@ Use both for defense in depth.
 For btrfs: `rootflags=subvol=@,x-systemd.device-timeout=0`. Without `subvol=@`, systemd mounts top-level btrfs (empty subvolume dirs) → no init → switch_root fails → emergency loop. **Must be conditional** — ext4/xfs don't use subvol.
 
 Similarly `MODULES=(igc btrfs)` in mkinitcpio.conf must be conditional — only include `btrfs` module when `bootstrap_filesystem == 'btrfs'`.
+
+### initramfs predictable naming requires udev rules in FILES
+
+`sd-network` in initramfs relies on udev for interface naming (predictable names like `enp1s0`). Without udev rules in the initramfs, all interfaces appear as `eth0`/`eth1` — matching a `.network` file by `Name=enp1s0` fails, and the interface gets no config.
+
+**Fix:** Add these udev rules to `FILES=` in mkinitcpio.conf:
+
+```
+FILES=(... /usr/lib/udev/rules.d/75-net-description.rules /usr/lib/udev/rules.d/80-net-setup-link.rules /usr/lib/systemd/network/99-default.link)
+```
+
+Only needed when using `sd-network` with predictable naming. The Pi playbook uses `initramfs-tools` + dropbear with legacy `eth0` naming — not affected.
+
+### ip= kernel parameter redundant with sd-network
+
+When using `sd-network` + `sd-tinyssh` mkinitcpio hooks, the `ip=` kernel parameter is **not needed** — the `.network` file in the initramfs (via `FILES`) handles all networking. Remove `ip=` from kernel cmdline to avoid confusion.
+
+**Pi (initramfs-tools):** Still needs `ip=` in `cmdline.txt` — initramfs-tools dropbear uses `ip=` directly, not `.network` files. Do NOT remove it for Pi.
+
+### sshd port configurable via bootstrap_sshd_port
+
+Set `bootstrap_sshd_port` in config.yml (default: 22). The value is written to `/etc/ssh/sshd_config.d/10-hardening.conf` as `Port {{ bootstrap_sshd_port }}`. Works for both Arch and Pi. Set to non-standard (e.g., 4455) to reduce scan noise — initramfs SSH runs on 22 during unlock.
+
+### Shell must be in pacstrap package list
+
+If `bootstrap_user_shell` is set to `zsh` (or any non-default shell), it must be included in the pacstrap packages list BEFORE `useradd`/`chpasswd` runs. Otherwise setting the shell fails because the binary doesn't exist in the chroot yet. Add to `bootstrap_pacstrap_packages`.
 
 ### Root mount opts must be filesystem-aware
 

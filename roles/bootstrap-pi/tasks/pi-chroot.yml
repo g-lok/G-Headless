@@ -211,23 +211,11 @@
       'useradd -m -G sudo -s /bin/bash {{ bootstrap_user_name }} 2>/dev/null; true'
   changed_when: true
 
-- name: Write user password to chroot temp file
-  ansible.builtin.copy:
-    content: "{{ bootstrap_user_name }}:{{ bootstrap_user_password }}\n"
-    dest: /mnt/{{ bootstrap_mount }}/root/.pw_user
-    mode: '0600'
-  no_log: true
-
-- name: Set user password via chpasswd
+- name: Set user password via chpasswd (stdin)
   ansible.builtin.shell:
-    cmd: "chroot /mnt/{{ bootstrap_mount }} chpasswd < /mnt/{{ bootstrap_mount }}/root/.pw_user"
+    cmd: "chroot /mnt/{{ bootstrap_mount }} chpasswd"
+    stdin: "{{ bootstrap_user_name }}:{{ bootstrap_user_password }}"
   changed_when: true
-  no_log: true
-
-- name: Remove user password temp file
-  ansible.builtin.file:
-    path: /mnt/{{ bootstrap_mount }}/root/.pw_user
-    state: absent
   no_log: true
 
 - name: Create user .ssh and authorized_keys inside chroot
@@ -239,7 +227,7 @@
 - name: Harden SSH inside chroot
   ansible.builtin.shell: |
     chroot /mnt/{{ bootstrap_mount }} /bin/bash -c \
-      'mkdir -p /etc/ssh/sshd_config.d && echo -e "PasswordAuthentication no\nPermitRootLogin no\nPubkeyAuthentication yes\nAuthenticationMethods publickey" > /etc/ssh/sshd_config.d/10-hardening.conf && chmod 0600 /etc/ssh/sshd_config.d/10-hardening.conf'
+      'mkdir -p /etc/ssh/sshd_config.d && echo -e "Port {{ bootstrap_sshd_port }}\nPasswordAuthentication no\nPermitRootLogin no\nPubkeyAuthentication yes\nAuthenticationMethods publickey" > /etc/ssh/sshd_config.d/10-hardening.conf && chmod 0600 /etc/ssh/sshd_config.d/10-hardening.conf'
   changed_when: true
 
 - name: Enable services inside chroot
