@@ -35,12 +35,6 @@
   changed_when: false
   failed_when: false
 
-- name: Remove temp LUKS keyfile
-  ansible.builtin.file:
-    path: /tmp/luks-keyfile
-    state: absent
-  no_log: true
-
 - name: Remove mount directory
   ansible.builtin.file:
     path: "{{ bootstrap_mount }}"

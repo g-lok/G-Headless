@@ -42,11 +42,21 @@ Never mount directly under `/mnt`. Each playbook owns a unique subdirectory (`/m
 
 `umount -R` fails on busy mounts. Always `umount -l -R`. LUKS close can also fail — iterate `dmsetup ls`, match to target disk, try `cryptsetup close`, fall back to `dmsetup remove -f`. Remove mount directory after unmount.
 
-### LUKS password via keyfile, not shell piping
+### LUKS password via ansible.builtin.shell stdin, not temp keyfile
 
-`echo "{{ password }}" | cryptsetup` and `printf '%s\n' "{{ password }}" | cryptsetup` break if password contains shell metacharacters (`$`, `\`, `%`, `"`, etc). `printf` interprets `%` as format specifiers. `echo` mangles backslash escapes.
+`echo "{{ password }}" | cryptsetup` breaks on shell metacharacters. The old fix (temp keyfile via `ansible.builtin.copy`) works but adds complexity — write + cleanup tasks, `no_log` on all three.
 
-**Fix:** Write password to temp keyfile (`/tmp/luks-keyfile` with `mode: 0600`), pass via `--key-file=/tmp/luks-keyfile` using `ansible.builtin.command` with `argv` (no shell). Remove keyfile after use.
+**Better fix:** Use `ansible.builtin.shell` with `stdin:` parameter and `--key-file=-`. Ansible passes input directly, bypassing shell expansion. No temp file. One task instead of three.
+
+```yaml
+- name: LUKS2 format root partition
+  ansible.builtin.shell:
+    cmd: "cryptsetup luksFormat --type=luks2 --key-file=- '{{ bootstrap_luks_part }}'"
+    stdin: "{{ bootstrap_luks_password }}"
+  no_log: true
+```
+
+`--key-file=-` tells cryptsetup to read key from stdin. `stdin:` in `ansible.builtin.shell` avoids shell metacharacters the same way `argv` in `ansible.builtin.command` does — but allows pipes/redirects.
 
 ### noswap is not a valid kernel parameter
 
@@ -106,9 +116,40 @@ Similarly `bootstrap.yml` had unconditional `MODULES=(igc btrfs)` — `btrfs` mo
 
 The host has no `root` LUKS mapper — all `root*` mappers on the host belong to the playbook's target disk. Grep pattern should match `^{{ luks_mapper_name }}` (catches `root` and `root-*`) not `^{{ luks_mapper_name }}-` (misses `root`). This applies when using a unique per-playbook mapper name prefix like `root`.
 
-### chpasswd via echo breaks with shell metacharacters
+### chpasswd via stdin (simpler than temp file)
 
-`echo user:{{ password }} | chpasswd` (inside arch-chroot or chroot) has the same shell quoting bug as the LUKS password issue. Fix: write `user:password` content via `ansible.builtin.copy` to a file inside the chroot (at `/root/.pw_user`, avoiding the shadowed /tmp), then `arch-chroot /mnt chpasswd < /root/.pw_user`, then remove the temp file.
+Same fix as LUKS: use `ansible.builtin.shell` with `stdin:` parameter. Replaces 3 tasks (write → chpasswd → cleanup) with 1.
+
+```yaml
+- name: Set user password via chpasswd
+  ansible.builtin.shell:
+    cmd: "arch-chroot /mnt/{{ bootstrap_mount }} chpasswd"
+    stdin: "{{ bootstrap_user_name }}:{{ bootstrap_user_password }}"
+  no_log: true
+```
+
+The old temp-file pattern (`copy` → `chroot chpasswd < /root/.pw_user` → `file: state=absent`) is now superseded.
+
+### initramfs predictable naming needs udev rules in FILES
+
+With `sd-network` hook, `.network` files use predictable names (`enp1s0`). But initramfs udev doesn't ship naming rules by default — all interfaces show as `eth0/eth1`. Match by `Name=enp1s0` fails → interface gets no config → no network in initramfs.
+
+**Fix:** Add to mkinitcpio `FILES`:
+- `/usr/lib/udev/rules.d/75-net-description.rules` — PCI vendor/device → interface name
+- `/usr/lib/udev/rules.d/80-net-setup-link.rules` — apply naming policy
+- `/usr/lib/systemd/network/99-default.link` — default link policy (needed by 80-*)
+
+Only needed for `sd-network` initramfs. Pi (initramfs-tools/dropbear) uses `eth0` legacy naming — not affected.
+
+### sd-network obviates ip= kernel parameter
+
+`sd-network` hook in mkinitcpio handles networking entirely via `.network` files in the initramfs. The `ip=` kernel parameter is redundant (and confusing — it requires exact interface name with no glob support). Remove `ip=` when using `sd-network` + `sd-tinyssh`.
+
+**Pi does NOT remove ip=:** Pi uses initramfs-tools + dropbear, which reads `ip=` from cmdline.txt directly. No `.network` file support.
+
+### sshd port in hardening config
+
+Added `bootstrap_sshd_port` variable (default 22) to both Arch and Pi defaults. Written to `/etc/ssh/sshd_config.d/10-hardening.conf` as `Port {{ bootstrap_sshd_port }}`. Useful when initramfs SSH and post-boot sshd both need port 22 during unlock, then post-boot moves to a non-standard port.
 
 ### Root password should not be set
 
