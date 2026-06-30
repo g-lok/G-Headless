@@ -76,23 +76,33 @@ After pacstrap, `vmlinuz-linux` may be missing from `/boot/`. Defensive reinstal
 
 `umount -R` fails on busy mounts. Always `umount -l -R`. LUKS close can also fail — iterate `dmsetup ls`, match to target disk, try `cryptsetup close`, fall back to `dmsetup remove -f`. Remove mount directory after unmount. Both Arch (`roles/bootstrap-arch/tasks/cleanup.yml`) and Pi (`roles/bootstrap-pi/tasks/cleanup.yml`) use this pattern.
 
-### LUKS password via ansible.builtin.shell stdin (preferred)
+### LUKS password via ansible.builtin.command + argv + | trim (preferred)
 
 `echo "{{ password }}" | cryptsetup` and `printf '%s\n' "{{ password }}" | cryptsetup` break if password contains shell metacharacters (`$`, `\`, `%`, `"`, etc). **Same bug applies to `echo user:password | chpasswd`**.
 
-**Fix:** Use `ansible.builtin.shell` with `stdin:` parameter — Ansible passes input directly, no shell expansion. No temp files, no cleanup.
+**Fix:** Use `ansible.builtin.command` with `argv:` list (bypasses shell entirely) + `stdin: "{{ password | trim }}"` to strip trailing whitespace. `ansible.builtin.shell` always appends `\n` to stdin — cryptsetup treats newline as literal password data. No temp files, no cleanup.
 
 ```yaml
 - name: LUKS2 format root partition
-  ansible.builtin.shell:
-    cmd: "cryptsetup luksFormat --type=luks2 --key-file=- '{{ bootstrap_luks_part }}'"
-    stdin: "{{ bootstrap_luks_password }}"
+  ansible.builtin.command:
+    argv:
+      - cryptsetup
+      - luksFormat
+      - --type=luks2
+      - --key-file=-
+      - "{{ bootstrap_luks_part }}"
+    stdin: "{{ bootstrap_luks_password | trim }}"
   no_log: true
 
 - name: Open LUKS container
-  ansible.builtin.shell:
-    cmd: "cryptsetup open --key-file=- '{{ bootstrap_luks_part }}' '{{ bootstrap_luks_mapper_name }}'"
-    stdin: "{{ bootstrap_luks_password }}"
+  ansible.builtin.command:
+    argv:
+      - cryptsetup
+      - open
+      - --key-file=-
+      - "{{ bootstrap_luks_part }}"
+      - "{{ bootstrap_luks_mapper_name }}"
+    stdin: "{{ bootstrap_luks_password | trim }}"
   no_log: true
 
 - name: Set user password via chpasswd
@@ -102,7 +112,9 @@ After pacstrap, `vmlinuz-linux` may be missing from `/boot/`. Defensive reinstal
   no_log: true
 ```
 
-The `--key-file=-` flag reads the password from stdin. The `stdin:` parameter in `ansible.builtin.shell` bypasses shell metacharacter issues entirely. No temp file to write or clean up.
+The `--key-file=-` flag reads the password from stdin. `ansible.builtin.command` with `argv:` bypasses shell metacharacter issues entirely. `| trim` strips trailing whitespace/newlines that shell module would append. No temp file to write or clean up.
+
+**chpasswd still uses `ansible.builtin.shell` with stdin** — chpasswd expects newline-terminated input, so the shell's automatic `\n` append is correct behavior.
 
 **chpasswd with `< /path` redirect (old pattern):** The redirect runs on the HOST shell, so path must include host mount prefix (`/mnt/{{ bootstrap_mount }}/root/.pw_user`). arch-chroot shadows `/tmp` with tmpfs — use `/root/` paths. This pattern is now superseded by the stdin approach above.
 
