@@ -81,7 +81,7 @@
 
 - name: LUKS2 format root partition
   ansible.builtin.shell:
-    cmd: >
+    cmd: >-
       cryptsetup luksFormat --type=luks2
       --cipher={{ bootstrap_luks_cipher }} --key-size={{ bootstrap_luks_key_size | string }}
       --pbkdf={{ bootstrap_luks_pbkdf }} --label={{ bootstrap_luks_label }}
