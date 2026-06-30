@@ -101,12 +101,18 @@
   failed_when: false
 
 - name: LUKS2 format target root partition
-  ansible.builtin.shell:
-    cmd: >-
-      cryptsetup luksFormat --disable-locks --type=luks2
-      --pbkdf-memory=512000 --pbkdf-parallel=1 --batch-mode
-      --key-file=- "{{ tgt_root }}"
-    stdin: "{{ bootstrap_luks_password }}"
+  ansible.builtin.command:
+    argv:
+      - cryptsetup
+      - luksFormat
+      - --disable-locks
+      - --type=luks2
+      - --pbkdf-memory=512000
+      - --pbkdf-parallel=1
+      - --batch-mode
+      - --key-file=-
+      - "{{ tgt_root }}"
+    stdin: "{{ bootstrap_luks_password | trim }}"
   no_log: true
   register: luks_format
   changed_when: luks_format.rc == 0
@@ -122,9 +128,14 @@
     luks_uuid: "{{ luks_uuid_result.stdout }}"
 
 - name: Open LUKS container
-  ansible.builtin.shell:
-    cmd: "cryptsetup open --key-file=- '{{ tgt_root }}' '{{ bootstrap_luks_mapper_name | default('crypted') }}'"
-    stdin: "{{ bootstrap_luks_password }}"
+  ansible.builtin.command:
+    argv:
+      - cryptsetup
+      - open
+      - --key-file=-
+      - "{{ tgt_root }}"
+      - "{{ bootstrap_luks_mapper_name | default('crypted') }}"
+    stdin: "{{ bootstrap_luks_password | trim }}"
   no_log: true
   register: luks_open
   changed_when: luks_open.rc == 0

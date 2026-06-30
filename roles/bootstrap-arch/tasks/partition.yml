@@ -80,22 +80,32 @@
     timeout: 10
 
 - name: LUKS2 format root partition
-  ansible.builtin.shell:
-    cmd: >-
-      cryptsetup luksFormat --type=luks2
-      --cipher={{ bootstrap_luks_cipher }} --key-size={{ bootstrap_luks_key_size | string }}
-      --pbkdf={{ bootstrap_luks_pbkdf }} --label={{ bootstrap_luks_label }}
-      --batch-mode --key-file=-
-      "{{ bootstrap_luks_part }}"
-    stdin: "{{ bootstrap_luks_password }}"
+  ansible.builtin.command:
+    argv:
+      - cryptsetup
+      - luksFormat
+      - --type=luks2
+      - --cipher={{ bootstrap_luks_cipher }}
+      - --key-size={{ bootstrap_luks_key_size | string }}
+      - --pbkdf={{ bootstrap_luks_pbkdf }}
+      - --label={{ bootstrap_luks_label }}
+      - --batch-mode
+      - --key-file=-
+      - "{{ bootstrap_luks_part }}"
+    stdin: "{{ bootstrap_luks_password | trim }}"
   no_log: true
   register: luks_format
   changed_when: luks_format.rc == 0
 
 - name: Open LUKS container
-  ansible.builtin.shell:
-    cmd: "cryptsetup open --key-file=- '{{ bootstrap_luks_part }}' '{{ bootstrap_luks_mapper_name }}'"
-    stdin: "{{ bootstrap_luks_password }}"
+  ansible.builtin.command:
+    argv:
+      - cryptsetup
+      - open
+      - --key-file=-
+      - "{{ bootstrap_luks_part }}"
+      - "{{ bootstrap_luks_mapper_name }}"
+    stdin: "{{ bootstrap_luks_password | trim }}"
   no_log: true
   register: luks_open
   changed_when: luks_open.rc == 0
