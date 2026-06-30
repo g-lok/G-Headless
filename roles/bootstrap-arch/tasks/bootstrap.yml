@@ -136,6 +136,7 @@
       FILES=(/etc/crypttab.initramfs /etc/systemd/network/20-wired.network /usr/lib/udev/rules.d/75-net-description.rules /usr/lib/udev/rules.d/80-net-setup-link.rules /usr/lib/systemd/network/99-default.link)
       HOOKS=(base systemd autodetect microcode modconf kms keyboard sd-vconsole block sd-network sd-tinyssh sd-encrypt filesystems fsck)
       SD_TINYSSH_COMMAND="systemd-tty-ask-password-agent --query --watch"
+      SD_TINYSSH_AUTHORIZED_KEYS=/etc/tinyssh/root_key
     mode: "0644"
 
 # ── Kernel cmdline ─────────────────────────────────────

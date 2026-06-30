@@ -182,6 +182,17 @@ When using `sd-network` + `sd-tinyssh` mkinitcpio hooks, the `ip=` kernel parame
 
 **Pi (initramfs-tools):** Still needs `ip=` in `cmdline.txt` — initramfs-tools dropbear uses `ip=` directly, not `.network` files. Do NOT remove it for Pi.
 
+### sd-tinyssh hook reads authorized keys from SD_TINYSSH_AUTHORIZED_KEYS
+
+The `sd-tinyssh` mkinitcpio hook (from `mkinitcpio-systemd-extras`) reads authorized keys from `$SD_TINYSSH_AUTHORIZED_KEYS`, defaulting to `/root/.ssh/authorized_keys`. It does NOT read `/etc/tinyssh/root_key` unless explicitly configured.
+
+**Fix:** Set in mkinitcpio.conf:
+```
+SD_TINYSSH_AUTHORIZED_KEYS=/etc/tinyssh/root_key
+```
+
+The playbook writes the SSH public key to `/etc/tinyssh/root_key` before running mkinitcpio. Without this variable, the hook looks for `/root/.ssh/authorized_keys` (which doesn't exist) and the initramfs has no authorized keys → all SSH connections are rejected.
+
 ### sshd port configurable via bootstrap_sshd_port
 
 Set `bootstrap_sshd_port` in config.yml (default: 22). The value is written to `/etc/ssh/sshd_config.d/10-hardening.conf` as `Port {{ bootstrap_sshd_port }}`. Works for both Arch and Pi. Set to non-standard (e.g., 4455) to reduce scan noise — initramfs SSH runs on 22 during unlock.

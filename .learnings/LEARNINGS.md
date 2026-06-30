@@ -161,6 +161,12 @@ Workstation auto-benchmarks Argon2 to ~1GB. Pi initramfs has limited RAM — emb
 
 **Fix:** `--pbkdf-memory=512000 --pbkdf-parallel=1` in `cryptsetup luksFormat`.
 
+### sd-tinyssh does not read /etc/tinyssh/root_key by default
+
+**Bug:** Playbook writes key to `/etc/tinyssh/root_key`, but the `sd-tinyssh` mkinitcpio hook defaults to `SD_TINYSSH_AUTHORIZED_KEYS=/root/.ssh/authorized_keys`. The initramfs is built without the authorized key → all SSH connections get `Permission denied (publickey)`.
+
+**Fix:** Add `SD_TINYSSH_AUTHORIZED_KEYS=/etc/tinyssh/root_key` to mkinitcpio.conf. The hook reads the key from the correct path and bundles it into the initramfs.
+
 ### Pi 5 has hardware AES acceleration
 
 Unlike Pi 3/4, Pi 5 has dedicated AES hardware. `aes-xts-plain64` runs at ~1800 MiB/s — same cipher as x86_64. No need for `xchacha20,aes-adiantum-plain64` fallback.
