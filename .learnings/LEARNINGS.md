@@ -154,3 +154,13 @@ Added `bootstrap_sshd_port` variable (default 22) to both Arch and Pi defaults. 
 ### Root password should not be set
 
 Arch and Debian/RPi OS both default to locked root (no password). Don't set a root password — user logs in as themselves and `sudo -i` to become root. Locked root prevents console/SSH brute-force on the `root` account. Remove root password setup entirely from playbooks.
+
+### Pi PBKDF memory must be capped
+
+Workstation auto-benchmarks Argon2 to ~1GB. Pi initramfs has limited RAM — embedding 1GB memory cost in the LUKS header causes failures on Pi 3/4 and wastes RAM on Pi 5.
+
+**Fix:** `--pbkdf-memory=512000 --pbkdf-parallel=1` in `cryptsetup luksFormat`.
+
+### Pi 5 has hardware AES acceleration
+
+Unlike Pi 3/4, Pi 5 has dedicated AES hardware. `aes-xts-plain64` runs at ~1800 MiB/s — same cipher as x86_64. No need for `xchacha20,aes-adiantum-plain64` fallback.

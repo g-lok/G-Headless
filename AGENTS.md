@@ -132,6 +132,24 @@ The Pi playbook supports Pi 3, 4, and 5. Set `bootstrap_pi_model` in config.yml 
 - Initramfs name: `initramfs_2710` (Pi 3), `initramfs_2711` (Pi 4), `initramfs_2712` (Pi 5)
 - Kernel modules: ARMv8 crypto for Pi 3, ARMv8 CE crypto for Pi 4/5
 
+### Pi PBKDF memory cap
+
+**Critical:** The workstation auto-benchmarks Argon2 memory to ~1GB. Pi initramfs has limited RAM — it must allocate that much memory just to verify the LUKS password. On 8GB Pi 5 it works, but it's wasteful. On Pi 3/4 it can outright fail.
+
+**Fix:** Always pass `--pbkdf-memory=512000 --pbkdf-parallel=1` to `cryptsetup luksFormat` for Pi targets:
+
+```yaml
+cryptsetup luksFormat --disable-locks --type=luks2
+  --pbkdf-memory=512000 --pbkdf-parallel=1 --batch-mode
+  --key-file=- "{{ tgt_root }}"
+```
+
+The `roles/bootstrap-pi/tasks/pi-prepare.yml` already includes this. Do not remove it.
+
+### Pi 5 has hardware AES
+
+Unlike Pi 3/4, Pi 5 has dedicated AES hardware acceleration. `aes-xts-plain64` runs at ~1800 MiB/s — same cipher as x86_64, no performance penalty. No need for the `xchacha20,aes-adiantum-plain64` fallback (needed on Pi 3/4 without crypto extensions).
+
 ### LUKS mapper cleanup — dual approach
 
 Both cleanup and emergency-cleanup use two methods:
