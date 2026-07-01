@@ -3,6 +3,10 @@
 
 - name: Bootstrap with guaranteed cleanup
   block:
+    - name: Set base mapper name for cleanup
+      ansible.builtin.set_fact:
+        luks_mapper_base: "{{ bootstrap_luks_mapper_name | default('root') }}"
+
     - name: Phase 1 — Partition, LUKS, filesystem
       ansible.builtin.include_tasks: partition.yml
 

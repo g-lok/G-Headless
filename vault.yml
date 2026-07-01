@@ -1,17 +1,13 @@
 ---
-# ── Ansible Vault: Secrets for bootstrap playbooks ──────────
-# Edit with your secret values, then encrypt:
-#   ansible-vault encrypt vault.yml
-# Or decrypt to edit, then re-encrypt:
-#   ansible-vault decrypt vault.yml
-#   (edit values)
+# ── SECRETS (REQUIRED) ──────────────────────────────────────────
+# All variables in this file MUST be configured.
+# It is HIGHLY RECOMMENDED to encrypt this file using ansible-vault:
 #   ansible-vault encrypt vault.yml
 #
-# Both playbooks use these same variables:
-#   bootstrap_luks_password: "your-luks-password"
-#   bootstrap_user_password: "your-user-password"
-#
-# Root password is NOT set (locked by default — use sudo).
+# bootstrap_luks_password: "CHANGEME_LUKS_PASS"
+# bootstrap_user_password: "CHANGEME_USER_PASS"
+# bootstrap_ssh_public_key: "ssh-ed25519 AAAA... your-key-here"
 
-bootstrap_luks_password: ""
-bootstrap_user_password: ""
+bootstrap_luks_password: "CHANGEME_LUKS_PASS"
+bootstrap_user_password: "CHANGEME_USER_PASS"
+bootstrap_ssh_public_key: "CHANGEME_SSH_PUB_KEY"

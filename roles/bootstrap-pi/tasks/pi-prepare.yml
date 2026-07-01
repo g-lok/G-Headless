@@ -157,6 +157,7 @@
     src: "{{ src_root }}"
     fstype: ext4
     opts: ro
+    fstab: "/tmp/bootstrap-fstab-{{ bootstrap_mount }}"
     state: mounted
 
 - name: Mount target boot
@@ -164,6 +165,7 @@
     path: /mnt/{{ bootstrap_mount }}/boot
     src: "{{ tgt_boot }}"
     fstype: vfat
+    fstab: "/tmp/bootstrap-fstab-{{ bootstrap_mount }}"
     state: mounted
 
 - name: Mount target encrypted root
@@ -171,6 +173,7 @@
     path: /mnt/{{ bootstrap_mount }}
     src: "/dev/mapper/{{ bootstrap_luks_mapper_name | default('crypted') }}"
     fstype: ext4
+    fstab: "/tmp/bootstrap-fstab-{{ bootstrap_mount }}"
     state: mounted
 
 - name: Rsync rootfs from source to target
@@ -186,4 +189,5 @@
 - name: Unmount source root
   ansible.builtin.mount:
     path: /mnt/{{ bootstrap_mount }}/original
-    state: unmounted
+    fstab: "/tmp/bootstrap-fstab-{{ bootstrap_mount }}"
+    state: absent
