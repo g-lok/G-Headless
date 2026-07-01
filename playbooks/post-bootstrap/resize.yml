@@ -5,7 +5,7 @@
 # Usage:
 #   ansible-playbook playbooks/post-bootstrap/resize.yml \
 #     -e target_disk=/dev/nvme0n1 \
-#     --ask-become-pass
+#     --ask-become-pass --ask-vault-pass
 #
 # This playbook:
 #   1. Detects if partition needs expansion
@@ -17,6 +17,9 @@
   hosts: localhost
   gather_facts: true
   become: true
+
+  vars_files:
+    - ../../vault.yml
 
   vars:
     target_disk: ""  # Required: e.g., /dev/nvme0n1 or /dev/sda
@@ -39,15 +42,15 @@
              | first
              | default('/dev/mapper/' + luks_mapper_name) }}
 
-    - name: Detect partition device
+    - name: Detect partition device from LUKS mapper
       ansible.builtin.command:
-        cmd: "lsblk -npo PKNAME {{ root_dev }}"
-      register: part_dev_result
+        cmd: "cryptsetup status {{ root_dev | basename }}"
+      register: cryptsetup_status
       changed_when: false
 
-    - name: Set partition device
+    - name: Extract partition device
       ansible.builtin.set_fact:
-        part_dev: "{{ part_dev_result.stdout }}"
+        part_dev: "{{ cryptsetup_status.stdout | regex_search('device:\\s+(/dev/\\S+)', '\\1') | first }}"
 
     - name: Detect parent disk
       ansible.builtin.set_fact:
@@ -72,7 +75,7 @@
       ansible.builtin.shell:
         cmd: |
           set -euo pipefail
-          DISK_END=$(sgdisk -p "{{ disk_dev }}" | awk '/^Disk/ {print $3}')
+          DISK_END=$(sgdisk -p "{{ disk_dev }}" | awk '/^Disk \/dev/ {print $3; exit}')
           PART_LAST=$(sgdisk -i {{ part_num }} "{{ disk_dev }}" | awk '/Last sector/ {print $3}')
           THRESHOLD=$(( DISK_END - 34 ))
           if [ "$PART_LAST" -ge "$THRESHOLD" ]; then
@@ -100,7 +103,7 @@
             msg: "Partition {{ part_dev }} does not fill disk — expanding"
 
         - name: Record partition start sector
-          ansible.builtin.command:
+          ansible.builtin.shell:
             cmd: "sgdisk -i {{ part_num }} {{ disk_dev }} | awk '/First sector/ {print $3}'"
           register: start_sector_result
           changed_when: false
@@ -136,10 +139,13 @@
           failed_when: false
 
         - name: Expand LUKS container
-          ansible.builtin.command:
-            cmd: "cryptsetup resize {{ root_dev | basename }}"
+          ansible.builtin.shell:
+            cmd: "echo -n \"$PASS\" | cryptsetup resize {{ root_dev | basename }} --size 0"
+          environment:
+            PASS: "{{ luks_password }}"
           register: crypt_result
           changed_when: crypt_result.rc == 0
+          no_log: true
 
         - name: Expand btrfs filesystem
           when: fs_type == 'btrfs'

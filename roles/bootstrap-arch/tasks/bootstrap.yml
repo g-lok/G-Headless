@@ -61,6 +61,7 @@
       systemd
       efibootmgr
       python
+      {{ bootstrap_user_shell | basename }}
   register: pacstrap_result
   changed_when: pacstrap_result.rc == 0
   timeout: 600000
@@ -273,20 +274,13 @@
 - name: Copy vendored package into chroot
   ansible.builtin.copy:
     src: "{{ vendored_pkg.files[0].path }}"
-    dest: "/mnt/{{ bootstrap_mount }}/tmp/{{ vendored_pkg_basename }}"
+    dest: "/mnt/{{ bootstrap_mount }}/root/{{ vendored_pkg_basename }}"
     mode: "0644"
     force: true
 
 - name: Install vendored mkinitcpio-systemd-extras
-  ansible.builtin.command:
-    argv:
-      - pacman
-      - --root=/mnt/{{ bootstrap_mount }}
-      - --cachedir=/mnt/{{ bootstrap_mount }}/var/cache/pacman/pkg
-      - --config=/mnt/{{ bootstrap_mount }}/etc/pacman.conf
-      - -U
-      - --noconfirm
-      - "/mnt/{{ bootstrap_mount }}/tmp/{{ vendored_pkg_basename }}"
+  ansible.builtin.shell:
+    cmd: "arch-chroot /mnt/{{ bootstrap_mount }} pacman -U --noconfirm /root/{{ vendored_pkg_basename }}"
   changed_when: true
 
 # ── Initramfs network config ───────────────────────────

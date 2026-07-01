@@ -80,32 +80,27 @@
     timeout: 10
 
 - name: LUKS2 format root partition
-  ansible.builtin.command:
-    argv:
-      - cryptsetup
-      - luksFormat
-      - --type=luks2
-      - --cipher={{ bootstrap_luks_cipher }}
-      - --key-size={{ bootstrap_luks_key_size | string }}
-      - --pbkdf={{ bootstrap_luks_pbkdf }}
-      - --label={{ bootstrap_luks_label }}
-      - --batch-mode
-      - --key-file=-
-      - "{{ bootstrap_luks_part }}"
-    stdin: "{{ bootstrap_luks_password | trim }}"
+  ansible.builtin.shell:
+    cmd: echo -n "$PASS" | cryptsetup luksFormat --type=luks2 --cipher={{ bootstrap_luks_cipher }} --key-size={{ bootstrap_luks_key_size | string }} --pbkdf={{ bootstrap_luks_pbkdf }} --label={{ bootstrap_luks_label }} --batch-mode --key-file=- "{{ bootstrap_luks_part }}"
+  environment:
+    PASS: "{{ bootstrap_luks_password }}"
   no_log: true
   register: luks_format
   changed_when: luks_format.rc == 0
 
+- name: Verify LUKS2 password validation immediately
+  ansible.builtin.shell:
+    cmd: echo -n "$PASS" | cryptsetup open --test-passphrase --key-file=- "{{ bootstrap_luks_part }}"
+  environment:
+    PASS: "{{ bootstrap_luks_password }}"
+  no_log: true
+  changed_when: false
+
 - name: Open LUKS container
-  ansible.builtin.command:
-    argv:
-      - cryptsetup
-      - open
-      - --key-file=-
-      - "{{ bootstrap_luks_part }}"
-      - "{{ bootstrap_luks_mapper_name }}"
-    stdin: "{{ bootstrap_luks_password | trim }}"
+  ansible.builtin.shell:
+    cmd: echo -n "$PASS" | cryptsetup open --key-file=- "{{ bootstrap_luks_part }}" "{{ bootstrap_luks_mapper_name }}"
+  environment:
+    PASS: "{{ bootstrap_luks_password }}"
   no_log: true
   register: luks_open
   changed_when: luks_open.rc == 0
