@@ -5,6 +5,7 @@
   ansible.builtin.set_fact:
     playbook_type: pi
     bootstrap_mount: pi_bootstrap
+    luks_mapper_base: "{{ bootstrap_luks_mapper_name | default('crypted') }}"
 
 - name: Bootstrap with guaranteed cleanup
   block:

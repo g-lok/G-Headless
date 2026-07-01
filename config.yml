@@ -55,10 +55,10 @@ bootstrap_pi_model: 5  # 3, 4, or 5
 bootstrap_pi_base_image: "{{ playbook_dir }}/files/pi-base.img"
 bootstrap_pi_output_image: "{{ playbook_dir }}/files/pi-luks.img"
 
-# ── Secrets (defined in vault.yml) ────────────────────
-# Edit vault.yml with your values, then encrypt:
-#   ansible-vault encrypt vault.yml
-# Or use --extra-vars:
-#   ansible-playbook bootstrap-arch.yml --ask-become-pass \
-#     -e bootstrap_luks_password=xxx \
-#     -e bootstrap_user_password=xxx
+# ── SECRETS ───────────────────────────────────────────────────
+# CRITICAL: ALL SENSITIVE VARIABLES HAVE BEEN MOVED TO vault.yml
+# Please configure bootstrap_luks_password, bootstrap_user_password,
+# and bootstrap_ssh_public_key in vault.yml.
+#
+# DO NOT CONFIGURE THEM HERE.
+# ──────────────────────────────────────────────────────────────

@@ -132,6 +132,7 @@
         src: "/dev/mapper/{{ bootstrap_luks_mapper_name }}"
         fstype: btrfs
         opts: "{{ bootstrap_btrfs_opts }}"
+        fstab: "/tmp/bootstrap-fstab-{{ bootstrap_mount | basename }}"
         state: mounted
 
     - name: Create btrfs subvolumes
@@ -150,7 +151,8 @@
     - name: Unmount temporary root
       ansible.builtin.mount:
         path: "{{ bootstrap_mount }}"
-        state: unmounted
+        fstab: "/tmp/bootstrap-fstab-{{ bootstrap_mount | basename }}"
+        state: absent
 
 - name: Create ext4 filesystem
   when: bootstrap_filesystem == 'ext4'
@@ -175,6 +177,7 @@
     src: "/dev/mapper/{{ bootstrap_luks_mapper_name }}"
     fstype: btrfs
     opts: "{{ bootstrap_btrfs_opts }},subvol=@"
+    fstab: "/tmp/bootstrap-fstab-{{ bootstrap_mount | basename }}"
     state: mounted
 
 - name: Mount root filesystem (ext4/xfs)
@@ -184,6 +187,7 @@
     src: "/dev/mapper/{{ bootstrap_luks_mapper_name }}"
     fstype: "{{ bootstrap_filesystem }}"
     opts: defaults
+    fstab: "/tmp/bootstrap-fstab-{{ bootstrap_mount | basename }}"
     state: mounted
 
 - name: Mount remaining btrfs subvolumes
@@ -202,6 +206,7 @@
         src: "/dev/mapper/{{ bootstrap_luks_mapper_name }}"
         fstype: btrfs
         opts: "{{ bootstrap_btrfs_opts }},subvol={{ item.name }}"
+        fstab: "/tmp/bootstrap-fstab-{{ bootstrap_mount | basename }}"
         state: mounted
       loop: "{{ bootstrap_btrfs_subvolumes | rejectattr('path', 'equalto', '/') | list }}"
 
@@ -221,6 +226,7 @@
             src: "/dev/mapper/{{ bootstrap_luks_mapper_name }}"
             fstype: btrfs
             opts: "{{ bootstrap_btrfs_opts }},subvol={{ item.name }}"
+            fstab: "/tmp/bootstrap-fstab-{{ bootstrap_mount | basename }}"
             state: mounted
           loop: "{{ bootstrap_container_subvolume_list }}"
 
@@ -230,4 +236,5 @@
     src: "{{ bootstrap_efi_part }}"
     fstype: vfat
     opts: fmask=0077,dmask=0077
+    fstab: "/tmp/bootstrap-fstab-{{ bootstrap_mount | basename }}"
     state: mounted

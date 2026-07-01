@@ -9,7 +9,10 @@ This project provides Ansible playbooks to create LUKS-encrypted Linux installat
 The bootstrap process runs on any x86_64 Linux workstation with the target drive connected via USB enclosure. The resulting disk can be installed in any x86_64 UEFI system.
 
 **Features:**
+
 - LUKS2 encryption with Argon2id key derivation
+- **Isolated Mounts**: Uses temporary fstab to prevent workstation pollution
+- **Reliable Cleanup**: Hardened mapper closure with device-path matching
 - Multiple filesystem support: btrfs, ext4, xfs
 - Initramfs SSH unlock (tinyssh for Arch, dropbear for Debian)
 - Static or DHCP networking in initramfs
@@ -18,12 +21,14 @@ The bootstrap process runs on any x86_64 Linux workstation with the target drive
 - Swap disabled by default (k3s/docker compatible)
 
 **Supported platforms:**
+
 - **x86_64 systems** (ZimaBoard 2, NUCs, mini PCs, etc.): Arch Linux with systemd-boot UKI
 - **Raspberry Pi 3/4/5**: Raspberry Pi OS Lite with extlinux
 
 ## Requirements
 
 ### Host system (workstation)
+
 - Any x86_64 Linux (Arch, Debian/Ubuntu, Fedora, etc.)
 - Python 3.10+
 - Ansible 2.15+
@@ -35,7 +40,8 @@ The bootstrap process runs on any x86_64 Linux workstation with the target drive
   - `qemu-user-static` + `binfmt-support` (Pi only)
 
 ### Target drive
-- **x86_64**: Any SATA or NVMe drive in a USB enclosure during bootstrap
+
+- **x86_64**: Any SATA, NVMe drive, external HDD/SDD
 - **Raspberry Pi**: microSD card or USB SSD
 
 The resulting disk will boot on any x86_64 UEFI system (not limited to the workstation used for bootstrap).
@@ -61,27 +67,20 @@ cp config.yml.example config.yml
 
 ### 2. Prepare secrets
 
-Edit the stub `vault.yml` (already in repo) with your values, then encrypt:
+All sensitive variables are consolidated in `vault.yml`. Edit this file with your values, then encrypt it:
 
 ```bash
-# Edit vault.yml with your passwords
+# Edit vault.yml with your passwords and SSH key
 vim vault.yml
-# (fill in bootstrap_luks_password and bootstrap_user_password)
 
 # Encrypt it
 ansible-vault encrypt vault.yml
-
-# To edit later: ansible-vault decrypt vault.yml, edit, re-encrypt
 ```
 
-Or skip the vault file and pass secrets via command line:
-
-```bash
-# Extra vars (no vault file needed)
-ansible-playbook bootstrap-arch.yml --ask-become-pass \
-  -e bootstrap_luks_password=xxx \
-  -e bootstrap_user_password=xxx
-```
+**Required variables in `vault.yml`:**
+- `bootstrap_luks_password`: Password for disk encryption
+- `bootstrap_user_password`: Password for the default user
+- `bootstrap_ssh_public_key`: Your public SSH key for both initramfs and post-boot access
 
 ### 3. Run bootstrap
 
@@ -102,6 +101,7 @@ ansible-playbook bootstrap-pi.yml --ask-become-pass --ask-vault-pass
 ### 4. Deploy and boot
 
 **x86_64 systems:**
+
 1. Disconnect drive from workstation
 2. Install in target system (ZimaBoard, NUC, mini PC, etc.)
 3. Connect power + Ethernet
@@ -110,6 +110,7 @@ ansible-playbook bootstrap-pi.yml --ask-become-pass --ask-vault-pass
 6. System boots, SSH as your user
 
 **Raspberry Pi:**
+
 1. Write image to SD/SSD: `dd if=files/pi-luks.img of=/dev/sdX bs=4M status=progress`
 2. Insert in Pi, connect power + Ethernet
 3. SSH to initramfs: `ssh root@<IP>`
@@ -121,16 +122,18 @@ ansible-playbook bootstrap-pi.yml --ask-become-pass --ask-vault-pass
 See `config.yml.example` for all available options. Key settings:
 
 ### Disk and partitioning
+
 ```yaml
 bootstrap_target_disk: /dev/sdb
-bootstrap_partition_size_gb: 0  # 0 = full disk, >0 = minimal for imaging
+bootstrap_partition_size_gb: 0 # 0 = full disk, >0 = minimal for imaging
 bootstrap_create_image: true
 bootstrap_image_path: "{{ playbook_dir }}/files/bootstrap-image.img"
 ```
 
 ### Filesystem
+
 ```yaml
-bootstrap_filesystem: btrfs  # btrfs, ext4, or xfs
+bootstrap_filesystem: btrfs # btrfs, ext4, or xfs
 bootstrap_fs_label: rootfs
 
 # btrfs options
@@ -147,32 +150,37 @@ bootstrap_container_subvolumes: false
 ```
 
 ### Network
+
 ```yaml
-bootstrap_net_method: dhcp  # or static
-bootstrap_net_address: "192.168.1.100/24"  # static only
-bootstrap_net_gateway: "192.168.1.1"       # static only
-bootstrap_net_iface: "en*"                 # x86_64; Pi uses eth0
+bootstrap_net_method: dhcp # or static
+bootstrap_net_address: "192.168.1.100/24" # static only
+bootstrap_net_gateway: "192.168.1.1" # static only
+bootstrap_net_iface: "en*" # x86_64; Pi uses eth0
 ```
 
 ### User
+
 ```yaml
 bootstrap_user_name: admin
 bootstrap_user_shell: /bin/bash
-bootstrap_user_groups: [wheel]  # or [sudo] for Debian
+bootstrap_user_groups: [wheel] # or [sudo] for Debian
 bootstrap_ssh_public_key: "ssh-ed25519 AAAA... your-key"
 ```
 
 ### Swap
+
 ```yaml
-bootstrap_disable_swap: false  # true for k3s/docker
+bootstrap_disable_swap: false # true for k3s/docker
 ```
 
 ### Pi Model (Raspberry Pi only)
+
 ```yaml
-bootstrap_pi_model: 5  # 3, 4, or 5
+bootstrap_pi_model: 5 # 3, 4, or 5
 ```
 
 This determines the correct initramfs name and kernel modules for your Pi model:
+
 - Pi 3: Uses `initramfs_2710` with ARMv8 crypto modules
 - Pi 4: Uses `initramfs_2711` with ARMv8 CE crypto modules
 - Pi 5: Uses `initramfs_2712` with ARMv8 CE crypto modules (has hardware AES — no performance penalty)
@@ -248,16 +256,19 @@ bootstrap-arch.yml (or bootstrap-pi.yml)
 ## Troubleshooting
 
 ### LUKS password not working
+
 - Verify vault.yml or extra-vars are correct
 - Check `/tmp/luks-keyfile` content (if still present)
 - Test manually: `cryptsetup --test-passphrase luksOpen /dev/sdX2`
 
 ### Boot hangs at initramfs
+
 - Check initramfs networking config matches your network
 - Verify SSH key is in `/etc/tinyssh/root_key` (x86_64) or `/etc/dropbear/initramfs/authorized_keys` (Pi)
 - Check kernel cmdline has correct LUKS UUID
 
 ### Can't SSH to initramfs
+
 - Verify IP address and network connectivity
 - Check firewall isn't blocking port 22
 - Try different SSH client (some don't support ed25519 in older versions)
@@ -277,6 +288,7 @@ Contributions welcome! Please open an issue or PR.
 ## Credits
 
 Based on battle-tested guides and configurations from:
+
 - Arch Wiki: dm-crypt, systemd-boot, mkinitcpio
 - Raspberry Pi documentation
 - K3s documentation (swap requirements)
