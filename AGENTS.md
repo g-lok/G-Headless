@@ -29,7 +29,9 @@ Clean config must inline `Server =` lines — don't `Include = /etc/pacman.d/mir
 
 ### arch-chroot tmpfs shadow
 
-`arch-chroot` mounts tmpfs over `/tmp`. Files in `/mnt/{{ bootstrap_mount }}/tmp/` are INVISIBLE inside chroot. For pacman operations: use `pacman --root=/mnt/{{ bootstrap_mount }} --cachedir=... --config=...` directly. For shell commands: use `arch-chroot /mnt/{{ bootstrap_mount }} sh -c '...'` (expands inside chroot).
+`arch-chroot` mounts tmpfs over `/tmp`. Files in `/mnt/{{ bootstrap_mount }}/tmp/` are INVISIBLE inside chroot. For pacman operations: use `arch-chroot /mnt/{{ bootstrap_mount }} pacman -U /tmp/{{ pkg }}` (file copied to `/tmp/` becomes visible). For shell commands: use `arch-chroot /mnt/{{ bootstrap_mount }} sh -c '...'` (expands inside chroot).
+
+**Critical:** Never use host `pacman --root=/mnt/...` — CachyOS pacman writes `%INSTALLED_DB%` keys that standard Arch pacman can't read. Always use `arch-chroot` to run pacman inside the chroot.
 
 ### chroot /etc/resolv.conf
 
@@ -48,21 +50,23 @@ Returns dicts with `.path` key. No `.version` attribute. Use `basename` filter a
 
 ### vendored AUR package install
 
-```
-# Copy (use /mnt/{{ bootstrap_mount }}/tmp/ but avoid arch-chroot for pacman)
-dest: "/mnt/{{ bootstrap_mount }}/tmp/{{ vendored_pkg_basename }}"
+```yaml
+# Copy into chroot /root/ (visible inside arch-chroot, /tmp is shadowed by tmpfs)
+- name: Copy vendored package into chroot
+  ansible.builtin.copy:
+    src: "{{ vendored_pkg.files[0].path }}"
+    dest: "/mnt/{{ bootstrap_mount }}/root/{{ vendored_pkg_basename }}"
+    mode: "0644"
+    force: true
 
-# Install
-ansible.builtin.command:
-  argv:
-    - pacman
-    - --root=/mnt/{{ bootstrap_mount }}
-    - --cachedir=/mnt/{{ bootstrap_mount }}/var/cache/pacman/pkg
-    - --config=/mnt/{{ bootstrap_mount }}/etc/pacman.conf
-    - -U
-    - --noconfirm
-    - "/mnt/{{ bootstrap_mount }}/tmp/{{ vendored_pkg_basename }}"
+# Install via arch-chroot (NOT host pacman --root=)
+- name: Install vendored mkinitcpio-systemd-extras
+  ansible.builtin.shell:
+    cmd: "arch-chroot /mnt/{{ bootstrap_mount }} pacman -U --noconfirm /root/{{ vendored_pkg_basename }}"
+  changed_when: true
 ```
+
+**Never use host `pacman --root=/mnt/...`** — CachyOS pacman writes `%INSTALLED_DB%` keys that standard Arch pacman can't read. Always use `arch-chroot` to run pacman inside the chroot.
 
 ### EFI partition residue
 
@@ -76,33 +80,32 @@ After pacstrap, `vmlinuz-linux` may be missing from `/boot/`. Defensive reinstal
 
 `umount -R` fails on busy mounts. Always `umount -l -R`. LUKS close can also fail — iterate `dmsetup ls`, match to target disk, try `cryptsetup close`, fall back to `dmsetup remove -f`. Remove mount directory after unmount. Both Arch (`roles/bootstrap-arch/tasks/cleanup.yml`) and Pi (`roles/bootstrap-pi/tasks/cleanup.yml`) use this pattern.
 
-### LUKS password via ansible.builtin.command + argv + | trim (preferred)
+### LUKS password via env var + echo -n (preferred)
 
 `echo "{{ password }}" | cryptsetup` and `printf '%s\n' "{{ password }}" | cryptsetup` break if password contains shell metacharacters (`$`, `\`, `%`, `"`, etc). **Same bug applies to `echo user:password | chpasswd`**.
 
-**Fix:** Use `ansible.builtin.command` with `argv:` list (bypasses shell entirely) + `stdin: "{{ password | trim }}"` to strip trailing whitespace. `ansible.builtin.shell` always appends `\n` to stdin — cryptsetup treats newline as literal password data. No temp files, no cleanup.
+**Fix:** Use `ansible.builtin.shell` with `environment:` block + `echo -n "$PASS" | cryptsetup`. Env vars pass through literally (no shell expansion). `echo -n` suppresses newline — cryptsetup gets exact password bytes. No temp files, no cleanup.
 
 ```yaml
 - name: LUKS2 format root partition
-  ansible.builtin.command:
-    argv:
-      - cryptsetup
-      - luksFormat
-      - --type=luks2
-      - --key-file=-
-      - "{{ bootstrap_luks_part }}"
-    stdin: "{{ bootstrap_luks_password | trim }}"
+  ansible.builtin.shell:
+    cmd: echo -n "$PASS" | cryptsetup luksFormat --type=luks2 --batch-mode --key-file=- "{{ bootstrap_luks_part }}"
+  environment:
+    PASS: "{{ bootstrap_luks_password }}"
+  no_log: true
+
+- name: Verify LUKS2 password validation immediately
+  ansible.builtin.shell:
+    cmd: echo -n "$PASS" | cryptsetup open --test-passphrase --key-file=- "{{ bootstrap_luks_part }}"
+  environment:
+    PASS: "{{ bootstrap_luks_password }}"
   no_log: true
 
 - name: Open LUKS container
-  ansible.builtin.command:
-    argv:
-      - cryptsetup
-      - open
-      - --key-file=-
-      - "{{ bootstrap_luks_part }}"
-      - "{{ bootstrap_luks_mapper_name }}"
-    stdin: "{{ bootstrap_luks_password | trim }}"
+  ansible.builtin.shell:
+    cmd: echo -n "$PASS" | cryptsetup open --key-file=- "{{ bootstrap_luks_part }}" "{{ bootstrap_luks_mapper_name }}"
+  environment:
+    PASS: "{{ bootstrap_luks_password }}"
   no_log: true
 
 - name: Set user password via chpasswd
@@ -112,7 +115,9 @@ After pacstrap, `vmlinuz-linux` may be missing from `/boot/`. Defensive reinstal
   no_log: true
 ```
 
-The `--key-file=-` flag reads the password from stdin. `ansible.builtin.command` with `argv:` bypasses shell metacharacter issues entirely. `| trim` strips trailing whitespace/newlines that shell module would append. No temp file to write or clean up.
+The `--key-file=-` flag reads the password from stdin. `echo -n` suppresses the trailing newline that shell would normally append. Env vars bypass shell metacharacter issues entirely. No temp file to write or clean up.
+
+**Verification step** runs immediately after luksFormat — `cryptsetup open --test-passphrase` catches password mismatches before proceeding with partition/format operations.
 
 **chpasswd still uses `ansible.builtin.shell` with stdin** — chpasswd expects newline-terminated input, so the shell's automatic `\n` append is correct behavior.
 
@@ -209,9 +214,9 @@ The playbook writes the SSH public key to `/etc/tinyssh/root_key` before running
 
 Set `bootstrap_sshd_port` in config.yml (default: 22). The value is written to `/etc/ssh/sshd_config.d/10-hardening.conf` as `Port {{ bootstrap_sshd_port }}`. Works for both Arch and Pi. Set to non-standard (e.g., 4455) to reduce scan noise — initramfs SSH runs on 22 during unlock.
 
-### Shell must be in pacstrap package list
+### Shell must be in pacstrap/apt package list
 
-If `bootstrap_user_shell` is set to `zsh` (or any non-default shell), it must be included in the pacstrap packages list BEFORE `useradd`/`chpasswd` runs. Otherwise setting the shell fails because the binary doesn't exist in the chroot yet. Add to `bootstrap_pacstrap_packages`.
+If `bootstrap_user_shell` is set to a non-default shell (zsh, fish, nushell, etc.), it must be installed during pacstrap/apt install BEFORE `useradd`/`chpasswd` runs. Use `{{ bootstrap_user_shell | basename }}` to extract the package name from the shell path. This works for any shell where the package name matches the binary name.
 
 ### Root mount opts must be filesystem-aware
 
@@ -219,6 +224,33 @@ Split root mount task into two with `when:` guards:
 - btrfs: `opts: "{{ bootstrap_btrfs_opts }},subvol=@"` 
 - ext4/xfs: `opts: defaults`
 Never append `,subvol=@` for non-btrfs filesystems — mount fails.
+
+### cryptsetup resize requires password via env var
+
+`cryptsetup resize` prompts for LUKS password. NEVER use `stdin:` parameter — it appends a newline that becomes part of the password. Use env var pattern:
+
+```yaml
+- name: Expand LUKS container
+  ansible.builtin.shell:
+    cmd: "echo -n \"$PASS\" | cryptsetup resize {{ root_dev | basename }} --size 0"
+  environment:
+    PASS: "{{ luks_password }}"
+  no_log: true
+```
+
+`echo -n` strips the newline, env var passes password literally. `--size 0` tells cryptsetup to use all available space.
+
+### sgdisk awk pattern must match disk size line only
+
+`sgdisk -p` outputs multiple lines starting with "Disk":
+- `Disk /dev/nvme0n1: 3907029168 sectors, 1.8 TiB` (disk size)
+- `Disk identifier (GUID): 43C7F1DF-...` (GUID)
+
+Using `awk '/^Disk/ {print $3}'` matches BOTH lines, causing arithmetic errors. Fix: `awk '/^Disk \/dev/ {print $3; exit}'` — matches only the disk size line and exits after first match.
+
+### ansible.builtin.command doesn't support pipes
+
+`command` module executes directly without shell — pipes (`|`), redirects (`>`), and shell variables don't work. Pipes get passed as literal arguments. Use `ansible.builtin.shell` when command contains pipes or shell features.
 
 ## Commands
 
@@ -230,7 +262,7 @@ ansible-playbook bootstrap-arch.yml --ask-become-pass --ask-vault-pass
 ansible-playbook bootstrap-pi.yml --ask-become-pass --ask-vault-pass
 
 # Post-restore resize
-ansible-playbook playbooks/post-bootstrap/resize.yml -e target_disk=/dev/nvme0n1 --ask-become-pass
+ansible-playbook playbooks/post-bootstrap/resize.yml -e target_disk=/dev/nvme0n1 --ask-become-pass --ask-vault-pass
 ```
 
 ## Vault
