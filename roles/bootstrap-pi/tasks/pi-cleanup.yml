@@ -26,6 +26,11 @@
     - "/mnt/{{ bootstrap_mount }}"
   failed_when: false
 
+- name: Recursive lazy unmount as last resort
+  ansible.builtin.shell:
+    cmd: "umount -l -R /mnt/{{ bootstrap_mount }} 2>/dev/null; true"
+  changed_when: false
+
 - name: Delete temporary isolated fstab
   ansible.builtin.file:
     path: "/tmp/bootstrap-fstab-{{ bootstrap_mount }}"
