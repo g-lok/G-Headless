@@ -53,6 +53,7 @@
       cryptsetup
       btrfs-progs
       dosfstools
+      gdisk
       sudo
       tinyssh
       openssh

@@ -7,7 +7,18 @@
   changed_when: false
   failed_when: false
 
-- name: Natively clean up bootstrap mounts
+- name: Unmount all btrfs subvolumes
+  ansible.builtin.mount:
+    path: "{{ bootstrap_mount }}{{ item.path }}"
+    fstab: "/tmp/bootstrap-fstab-{{ bootstrap_mount | basename }}"
+    state: absent
+  loop: "{{ ((bootstrap_btrfs_subvolumes | default([])) + (bootstrap_container_subvolume_list if bootstrap_container_subvolumes | bool else [])) | reverse | list }}"
+  when:
+    - bootstrap_filesystem | default('btrfs') == 'btrfs'
+    - item.path != '/'
+  failed_when: false
+
+- name: Natively clean up remaining bootstrap mounts
   ansible.builtin.mount:
     path: "{{ item }}"
     fstab: "/tmp/bootstrap-fstab-{{ bootstrap_mount | basename }}"
@@ -16,6 +27,11 @@
     - "{{ bootstrap_mount }}/boot"
     - "{{ bootstrap_mount }}"
   failed_when: false
+
+- name: Recursive lazy unmount as last resort
+  ansible.builtin.shell:
+    cmd: "umount -l -R {{ bootstrap_mount }} 2>/dev/null; true"
+  changed_when: false
 
 - name: Delete temporary isolated fstab
   ansible.builtin.file:

@@ -56,7 +56,7 @@
   ansible.builtin.shell: |
     chroot /mnt/{{ bootstrap_mount }} /bin/bash << 'CHROOT_EOF'
       apt update
-      apt install -y busybox cryptsetup cryptsetup-initramfs dropbear-initramfs python3 {{ bootstrap_user_shell | basename }}
+      apt install -y busybox cryptsetup cryptsetup-initramfs dropbear-initramfs gdisk python3 {{ bootstrap_user_shell | basename }}
     CHROOT_EOF
   register: apt_result
   changed_when: apt_result.rc == 0
